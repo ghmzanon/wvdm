@@ -27,6 +27,9 @@ static const GUID IID_IApplicationViewCollection =
 #define HOTKEY_ID_MOVE_NEXT  401
 #define HOTKEY_ID_EXIT       500
 
+#define TD_OK_BUTTON      0x0001
+#define TD_INFO_ICON      MAKEINTRESOURCEW(-3)
+
 typedef struct IObjectArrayVtbl IObjectArrayVtbl;
 typedef struct IObjectArray {
     const IObjectArrayVtbl *lpVtbl;
@@ -384,6 +387,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     if (g_provider) g_provider->lpVtbl->Release(g_provider);
 
     CoUninitialize();
-    MessageBoxW(NULL, L"vdmanager has exited.", L"vdmanager", MB_OK);
+    {
+        typedef HRESULT (WINAPI *TDProc)(HWND, HINSTANCE, PCWSTR, PCWSTR, PCWSTR, int, PCWSTR, int*);
+        TDProc td = NULL;
+        HMODULE mod = LoadLibraryW(L"user32.dll");
+        if (mod) {
+            td = (TDProc)GetProcAddress(mod, "TaskDialog");
+            FreeLibrary(mod);
+        }
+        if (!td) {
+            mod = LoadLibraryW(L"comctl32.dll");
+            if (mod) {
+                td = (TDProc)GetProcAddress(mod, "TaskDialog");
+                FreeLibrary(mod);
+            }
+        }
+        if (td)
+            td(NULL, NULL, L"vdmanager", L"vdmanager has exited.",
+               NULL, TD_OK_BUTTON, TD_INFO_ICON, NULL);
+        else
+            MessageBoxW(NULL, L"vdmanager has exited.", L"vdmanager", MB_SETFOREGROUND | MB_SYSTEMMODAL | MB_ICONINFORMATION);
+    }
     return 0;
 }
