@@ -3,34 +3,28 @@
 #include <windows.h>
 #include <objbase.h>
 #include <servprov.h>
+#include "config.h"
 
 static const GUID CLSID_ImmersiveShell =
     {0xC2F03A33, 0x21F5, 0x47FA, {0xB4, 0xBB, 0x15, 0x63, 0x62, 0xA2, 0xF2, 0x39}};
-
 static const GUID CLSID_VirtualDesktopManagerInternal =
     {0xC5E0CDCA, 0x7B6E, 0x41B2, {0x9F, 0xC4, 0xD9, 0x39, 0x75, 0xCC, 0x46, 0x7B}};
-
 static const GUID IID_IVirtualDesktopManagerInternal =
     {0x53F5CA0B, 0x158F, 0x4124, {0x90, 0x0C, 0x05, 0x71, 0x58, 0x06, 0x0B, 0x27}};
-
 static const GUID IID_IVirtualDesktop =
     {0x3F07F4BE, 0xB107, 0x441A, {0xAF, 0x0F, 0x39, 0xD8, 0x25, 0x29, 0x07, 0x2C}};
-
 static const GUID IID_IApplicationViewCollection =
     {0x1841C6D7, 0x4F9D, 0x42C0, {0xAF, 0x41, 0x87, 0x47, 0x53, 0x8F, 0x10, 0xE5}};
 
-#define HOTKEY_ID_BASE    100
-#define HOTKEY_ID_MOVE    200
-#define HOTKEY_ID_PREV    300
-#define HOTKEY_ID_NEXT    301
-#define HOTKEY_ID_MOVE_PREV  400
-#define HOTKEY_ID_MOVE_NEXT  401
-#define HOTKEY_ID_EXIT       500
-#define HOTKEY_ID_NEW        600
-#define HOTKEY_ID_REMOVE     601
-
-#define TD_OK_BUTTON      0x0001
-#define TD_INFO_ICON      MAKEINTRESOURCEW(-3)
+#define HOTKEY_ID_BASE      100
+#define HOTKEY_ID_MOVE      200
+#define HOTKEY_ID_PREV      300
+#define HOTKEY_ID_NEXT      301
+#define HOTKEY_ID_MOVE_PREV 400
+#define HOTKEY_ID_MOVE_NEXT 401
+#define HOTKEY_ID_EXIT      500
+#define HOTKEY_ID_NEW       600
+#define HOTKEY_ID_REMOVE    601
 
 typedef struct IObjectArrayVtbl IObjectArrayVtbl;
 typedef struct IObjectArray {
@@ -54,10 +48,10 @@ struct IVirtualDesktopVtbl {
     HRESULT (STDMETHODCALLTYPE *QueryInterface)(IVirtualDesktop*, REFIID, void**);
     ULONG   (STDMETHODCALLTYPE *AddRef)(IVirtualDesktop*);
     ULONG   (STDMETHODCALLTYPE *Release)(IVirtualDesktop*);
-    HRESULT (STDMETHODCALLTYPE *IsViewVisible)(IVirtualDesktop*, void*, BOOL*);
+    void *pad3;
     HRESULT (STDMETHODCALLTYPE *GetId)(IVirtualDesktop*, GUID*);
-    HRESULT (STDMETHODCALLTYPE *GetName)(IVirtualDesktop*, void**);
-    HRESULT (STDMETHODCALLTYPE *GetWallpaper)(IVirtualDesktop*, void**);
+    void *pad5;
+    void *pad6;
 };
 
 typedef struct IVirtualDesktopManagerInternalVtbl IVirtualDesktopManagerInternalVtbl;
@@ -71,20 +65,15 @@ struct IVirtualDesktopManagerInternalVtbl {
     ULONG   (STDMETHODCALLTYPE *Release)(IVirtualDesktopManagerInternal*);
     HRESULT (STDMETHODCALLTYPE *GetCount)(IVirtualDesktopManagerInternal*, UINT*);
     HRESULT (STDMETHODCALLTYPE *MoveViewToDesktop)(IVirtualDesktopManagerInternal*, void*, IVirtualDesktop*);
-    HRESULT (STDMETHODCALLTYPE *CanMoveViewBetweenDesktops)(IVirtualDesktopManagerInternal*, void*, BOOL*);
+    void *pad5;
     HRESULT (STDMETHODCALLTYPE *GetCurrentDesktop)(IVirtualDesktopManagerInternal*, IVirtualDesktop**);
     HRESULT (STDMETHODCALLTYPE *GetDesktops)(IVirtualDesktopManagerInternal*, IObjectArray**);
-    HRESULT (STDMETHODCALLTYPE *GetAdjacentDesktop)(IVirtualDesktopManagerInternal*, IVirtualDesktop*, UINT, IVirtualDesktop**);
+    void *pad8;
     HRESULT (STDMETHODCALLTYPE *SwitchDesktop)(IVirtualDesktopManagerInternal*, IVirtualDesktop*);
-    HRESULT (STDMETHODCALLTYPE *SwitchDesktopAndMoveForegroundView)(IVirtualDesktopManagerInternal*, IVirtualDesktop*);
+    void *pad10;
     HRESULT (STDMETHODCALLTYPE *CreateDesktop)(IVirtualDesktopManagerInternal*, IVirtualDesktop**);
-    HRESULT (STDMETHODCALLTYPE *MoveDesktop)(IVirtualDesktopManagerInternal*, IVirtualDesktop*, UINT);
+    void *pad12;
     HRESULT (STDMETHODCALLTYPE *RemoveDesktop)(IVirtualDesktopManagerInternal*, IVirtualDesktop*, IVirtualDesktop*);
-    HRESULT (STDMETHODCALLTYPE *FindDesktop)(IVirtualDesktopManagerInternal*, const GUID*, IVirtualDesktop**);
-    HRESULT (STDMETHODCALLTYPE *GetDesktopSwitchIncludeExcludeViews)(IVirtualDesktopManagerInternal*, IVirtualDesktop*, IObjectArray*, IObjectArray*);
-    HRESULT (STDMETHODCALLTYPE *SetName)(IVirtualDesktopManagerInternal*, IVirtualDesktop*, const WCHAR*);
-    HRESULT (STDMETHODCALLTYPE *SetWallpaper)(IVirtualDesktopManagerInternal*, IVirtualDesktop*, const WCHAR*);
-    HRESULT (STDMETHODCALLTYPE *UpdateWallpaperForAll)(IVirtualDesktopManagerInternal*, const WCHAR*);
 };
 
 typedef struct IApplicationViewVtbl IApplicationViewVtbl;
@@ -107,9 +96,9 @@ struct IApplicationViewCollectionVtbl {
     HRESULT (STDMETHODCALLTYPE *QueryInterface)(IApplicationViewCollection*, REFIID, void**);
     ULONG   (STDMETHODCALLTYPE *AddRef)(IApplicationViewCollection*);
     ULONG   (STDMETHODCALLTYPE *Release)(IApplicationViewCollection*);
-    HRESULT (STDMETHODCALLTYPE *GetViews)(IApplicationViewCollection*, IObjectArray**);
-    HRESULT (STDMETHODCALLTYPE *GetViewsByZOrder)(IApplicationViewCollection*, IObjectArray**);
-    HRESULT (STDMETHODCALLTYPE *GetViewsByAppUserModelID)(IApplicationViewCollection*, const WCHAR*, IObjectArray**);
+    void *pad3;
+    void *pad4;
+    void *pad5;
     HRESULT (STDMETHODCALLTYPE *GetViewForHwnd)(IApplicationViewCollection*, HWND, IApplicationView**);
 };
 
@@ -146,67 +135,6 @@ static HRESULT ensure_view_collection(void)
     return hr;
 }
 
-static void switch_to_desktop(int index)
-{
-    IObjectArray *desktops = NULL;
-    IVirtualDesktop *desktop = NULL;
-    HRESULT hr;
-
-    hr = ensure_manager();
-    if (FAILED(hr)) return;
-
-    hr = g_manager->lpVtbl->GetDesktops(g_manager, &desktops);
-    if (FAILED(hr) || !desktops) return;
-
-    hr = desktops->lpVtbl->GetAt(desktops, (UINT)index, &IID_IVirtualDesktop, (void**)&desktop);
-    if (FAILED(hr) || !desktop) {
-        desktops->lpVtbl->Release(desktops);
-        return;
-    }
-
-    g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
-
-    desktop->lpVtbl->Release(desktop);
-    desktops->lpVtbl->Release(desktops);
-}
-
-static void move_window_to_desktop(int index)
-{
-    HWND hwnd = GetForegroundWindow();
-    if (!hwnd) return;
-
-    HRESULT hr;
-    IApplicationView *view = NULL;
-    IObjectArray *desktops = NULL;
-    IVirtualDesktop *desktop = NULL;
-
-    hr = ensure_view_collection();
-    if (FAILED(hr)) return;
-
-    hr = g_view_collection->lpVtbl->GetViewForHwnd(g_view_collection, hwnd, &view);
-    if (FAILED(hr) || !view) return;
-
-    hr = g_manager->lpVtbl->GetDesktops(g_manager, &desktops);
-    if (FAILED(hr) || !desktops) {
-        view->lpVtbl->Release(view);
-        return;
-    }
-
-    hr = desktops->lpVtbl->GetAt(desktops, (UINT)index, &IID_IVirtualDesktop, (void**)&desktop);
-    if (FAILED(hr) || !desktop) {
-        view->lpVtbl->Release(view);
-        desktops->lpVtbl->Release(desktops);
-        return;
-    }
-
-    g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view, desktop);
-    g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
-
-    desktop->lpVtbl->Release(desktop);
-    desktops->lpVtbl->Release(desktops);
-    view->lpVtbl->Release(view);
-}
-
 static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid)
 {
     UINT count = 0;
@@ -226,42 +154,108 @@ static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid)
     return -1;
 }
 
-static void switch_to_adjacent_desktop(UINT direction)
+static IVirtualDesktop *get_desktop_at(int index)
+{
+    IObjectArray *desktops = NULL;
+    IVirtualDesktop *desktop = NULL;
+
+    if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops)) || !desktops)
+        return NULL;
+
+    HRESULT hr = desktops->lpVtbl->GetAt(desktops, (UINT)index, &IID_IVirtualDesktop, (void**)&desktop);
+    desktops->lpVtbl->Release(desktops);
+    return SUCCEEDED(hr) ? desktop : NULL;
+}
+
+static IVirtualDesktop *get_adjacent_desktop(UINT direction)
 {
     IVirtualDesktop *current = NULL;
-    IVirtualDesktop *target = NULL;
     IObjectArray *desktops = NULL;
+    IVirtualDesktop *target = NULL;
     GUID cur_guid;
+    UINT count;
     int idx;
-    HRESULT hr;
 
-    hr = ensure_manager();
-    if (FAILED(hr)) return;
-
-    hr = g_manager->lpVtbl->GetCurrentDesktop(g_manager, &current);
-    if (FAILED(hr) || !current) return;
-
-    hr = current->lpVtbl->GetId(current, &cur_guid);
+    if (FAILED(g_manager->lpVtbl->GetCurrentDesktop(g_manager, &current)) || !current)
+        return NULL;
+    if (FAILED(current->lpVtbl->GetId(current, &cur_guid))) {
+        current->lpVtbl->Release(current);
+        return NULL;
+    }
     current->lpVtbl->Release(current);
-    if (FAILED(hr)) return;
 
-    hr = g_manager->lpVtbl->GetDesktops(g_manager, &desktops);
-    if (FAILED(hr) || !desktops) return;
+    if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops)) || !desktops)
+        return NULL;
 
     idx = get_current_desktop_index(desktops, &cur_guid);
-    if (idx < 0) { desktops->lpVtbl->Release(desktops); return; }
+    if (idx < 0) {
+        desktops->lpVtbl->Release(desktops);
+        return NULL;
+    }
 
-    UINT count = 0;
-    desktops->lpVtbl->GetCount(desktops, &count);
+    if (FAILED(desktops->lpVtbl->GetCount(desktops, &count))) {
+        desktops->lpVtbl->Release(desktops);
+        return NULL;
+    }
+
+    if (!WRAP_ADJACENT) {
+        if ((direction == 0 && idx == 0) || (direction != 0 && idx == (int)count - 1)) {
+            desktops->lpVtbl->Release(desktops);
+            return NULL;
+        }
+    }
 
     int target_idx = (direction == 0)
         ? (idx == 0 ? (int)count - 1 : idx - 1)
         : (idx == (int)count - 1 ? 0 : idx + 1);
 
-    hr = desktops->lpVtbl->GetAt(desktops, (UINT)target_idx, &IID_IVirtualDesktop, (void**)&target);
+    HRESULT hr = desktops->lpVtbl->GetAt(desktops, (UINT)target_idx, &IID_IVirtualDesktop, (void**)&target);
     desktops->lpVtbl->Release(desktops);
-    if (FAILED(hr) || !target) return;
+    return SUCCEEDED(hr) ? target : NULL;
+}
 
+static void switch_to_desktop(int index)
+{
+    if (FAILED(ensure_manager())) return;
+    IVirtualDesktop *desktop = get_desktop_at(index);
+    if (!desktop) return;
+    g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
+    desktop->lpVtbl->Release(desktop);
+}
+
+static void move_window_to_desktop(int index)
+{
+    HWND hwnd = GetForegroundWindow();
+    if (!hwnd) return;
+
+    HRESULT hr;
+    IApplicationView *view = NULL;
+    IVirtualDesktop *desktop = NULL;
+
+    hr = ensure_view_collection();
+    if (FAILED(hr)) return;
+
+    hr = g_view_collection->lpVtbl->GetViewForHwnd(g_view_collection, hwnd, &view);
+    if (FAILED(hr) || !view) return;
+
+    desktop = get_desktop_at(index);
+    if (!desktop) {
+        view->lpVtbl->Release(view);
+        return;
+    }
+
+    g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view, desktop);
+    g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
+
+    desktop->lpVtbl->Release(desktop);
+    view->lpVtbl->Release(view);
+}
+
+static void switch_to_adjacent_desktop(UINT direction)
+{
+    if (FAILED(ensure_manager())) return;
+    IVirtualDesktop *target = get_adjacent_desktop(direction);
+    if (!target) return;
     g_manager->lpVtbl->SwitchDesktop(g_manager, target);
     target->lpVtbl->Release(target);
 }
@@ -271,16 +265,9 @@ static void move_window_to_adjacent_desktop(UINT direction)
     HWND hwnd = GetForegroundWindow();
     if (!hwnd) return;
 
-    IVirtualDesktop *current = NULL;
-    IVirtualDesktop *target = NULL;
-    IObjectArray *desktops = NULL;
-    IApplicationView *view = NULL;
-    GUID cur_guid;
-    int idx;
     HRESULT hr;
-
-    hr = ensure_manager();
-    if (FAILED(hr)) return;
+    IApplicationView *view = NULL;
+    IVirtualDesktop *target = NULL;
 
     hr = ensure_view_collection();
     if (FAILED(hr)) return;
@@ -288,42 +275,8 @@ static void move_window_to_adjacent_desktop(UINT direction)
     hr = g_view_collection->lpVtbl->GetViewForHwnd(g_view_collection, hwnd, &view);
     if (FAILED(hr) || !view) return;
 
-    hr = g_manager->lpVtbl->GetCurrentDesktop(g_manager, &current);
-    if (FAILED(hr) || !current) {
-        view->lpVtbl->Release(view);
-        return;
-    }
-
-    hr = current->lpVtbl->GetId(current, &cur_guid);
-    current->lpVtbl->Release(current);
-    if (FAILED(hr)) {
-        view->lpVtbl->Release(view);
-        return;
-    }
-
-    hr = g_manager->lpVtbl->GetDesktops(g_manager, &desktops);
-    if (FAILED(hr) || !desktops) {
-        view->lpVtbl->Release(view);
-        return;
-    }
-
-    idx = get_current_desktop_index(desktops, &cur_guid);
-    if (idx < 0) {
-        desktops->lpVtbl->Release(desktops);
-        view->lpVtbl->Release(view);
-        return;
-    }
-
-    UINT count = 0;
-    desktops->lpVtbl->GetCount(desktops, &count);
-
-    int target_idx = (direction == 0)
-        ? (idx == 0 ? (int)count - 1 : idx - 1)
-        : (idx == (int)count - 1 ? 0 : idx + 1);
-
-    hr = desktops->lpVtbl->GetAt(desktops, (UINT)target_idx, &IID_IVirtualDesktop, (void**)&target);
-    desktops->lpVtbl->Release(desktops);
-    if (FAILED(hr) || !target) {
+    target = get_adjacent_desktop(direction);
+    if (!target) {
         view->lpVtbl->Release(view);
         return;
     }
@@ -352,55 +305,16 @@ static void remove_virtual_desktop(void)
 {
     IVirtualDesktop *current = NULL;
     IVirtualDesktop *fallback = NULL;
-    IObjectArray *desktops = NULL;
-    GUID cur_guid;
-    int idx;
-    UINT count;
     HRESULT hr;
 
     hr = ensure_manager();
     if (FAILED(hr)) return;
 
-    hr = g_manager->lpVtbl->GetDesktops(g_manager, &desktops);
-    if (FAILED(hr) || !desktops) return;
-
-    hr = desktops->lpVtbl->GetCount(desktops, &count);
-    if (FAILED(hr) || count <= 1) {
-        desktops->lpVtbl->Release(desktops);
-        return;
-    }
-    desktops->lpVtbl->Release(desktops);
-
     hr = g_manager->lpVtbl->GetCurrentDesktop(g_manager, &current);
     if (FAILED(hr) || !current) return;
 
-    hr = g_manager->lpVtbl->GetDesktops(g_manager, &desktops);
-    if (FAILED(hr) || !desktops) {
-        current->lpVtbl->Release(current);
-        return;
-    }
-
-    hr = current->lpVtbl->GetId(current, &cur_guid);
-    if (FAILED(hr)) {
-        current->lpVtbl->Release(current);
-        desktops->lpVtbl->Release(desktops);
-        return;
-    }
-
-    idx = get_current_desktop_index(desktops, &cur_guid);
-    if (idx < 0) {
-        current->lpVtbl->Release(current);
-        desktops->lpVtbl->Release(desktops);
-        return;
-    }
-
-    hr = desktops->lpVtbl->GetCount(desktops, &count);
-
-    int target_idx = (idx == (int)count - 1) ? idx - 1 : idx + 1;
-
-    hr = desktops->lpVtbl->GetAt(desktops, (UINT)target_idx, &IID_IVirtualDesktop, (void**)&fallback);
-    desktops->lpVtbl->Release(desktops);
-    if (FAILED(hr) || !fallback) {
+    fallback = get_adjacent_desktop(1);
+    if (!fallback) {
         current->lpVtbl->Release(current);
         return;
     }
@@ -412,9 +326,39 @@ static void remove_virtual_desktop(void)
     fallback->lpVtbl->Release(fallback);
 }
 
+static void print_help(void)
+{
+    static const WCHAR *help =
+        L"vdmanager - virtual desktop switcher\n"
+        L"\n"
+        L"  --help, -h     show this message\n"
+        L"  --version, -v  show version\n"
+        L"\n"
+        L"Hotkeys:\n"
+        L"  Alt+1..9                 switch to desktop N\n"
+        L"  Alt+Shift+1..9           move window to desktop N\n"
+        L"  Ctrl+Alt+Left/Right               previous/next desktop\n"
+        L"  Ctrl+Alt+Shift+Left/Right          move window to adjacent\n"
+        L"  Ctrl+Alt+N               create new desktop\n"
+        L"  Ctrl+Alt+W               close current desktop\n"
+        L"  Ctrl+Alt+Q               quit\n";
+    MessageBoxW(NULL, help, L"vdmanager", MB_OK);
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                    LPSTR lpCmdLine, int nCmdShow)
 {
+    if (lpCmdLine && lpCmdLine[0]) {
+        if (lstrcmpiA(lpCmdLine, "--help") == 0 || lstrcmpiA(lpCmdLine, "-h") == 0) {
+            print_help();
+            return 0;
+        }
+        if (lstrcmpiA(lpCmdLine, "--version") == 0 || lstrcmpiA(lpCmdLine, "-v") == 0) {
+            MessageBoxW(NULL, L"vdmanager 1.0", L"vdmanager", MB_OK);
+            return 0;
+        }
+    }
+
     HRESULT hr;
     MSG msg = {0};
 
@@ -422,17 +366,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     if (FAILED(hr)) return 1;
 
     for (int i = 0; i < 9; i++) {
-        RegisterHotKey(NULL, HOTKEY_ID_BASE + i, MOD_ALT, '1' + i);
-        RegisterHotKey(NULL, HOTKEY_ID_MOVE + i, MOD_ALT | MOD_SHIFT, '1' + i);
+        RegisterHotKey(NULL, HOTKEY_ID_BASE + i, MOD_SWITCH, KEY_SWITCH(i));
+        RegisterHotKey(NULL, HOTKEY_ID_MOVE + i, MOD_MOVE, KEY_MOVE(i));
     }
 
-    RegisterHotKey(NULL, HOTKEY_ID_PREV, MOD_CONTROL | MOD_WIN, VK_LEFT);
-    RegisterHotKey(NULL, HOTKEY_ID_NEXT, MOD_CONTROL | MOD_WIN, VK_RIGHT);
-    RegisterHotKey(NULL, HOTKEY_ID_MOVE_PREV, MOD_CONTROL | MOD_WIN | MOD_SHIFT, VK_LEFT);
-    RegisterHotKey(NULL, HOTKEY_ID_MOVE_NEXT, MOD_CONTROL | MOD_WIN | MOD_SHIFT, VK_RIGHT);
-    RegisterHotKey(NULL, HOTKEY_ID_EXIT, MOD_ALT | MOD_CONTROL, 'Q');
-    RegisterHotKey(NULL, HOTKEY_ID_NEW, MOD_CONTROL | MOD_ALT, 'N');
-    RegisterHotKey(NULL, HOTKEY_ID_REMOVE, MOD_CONTROL | MOD_ALT, 'W');
+    RegisterHotKey(NULL, HOTKEY_ID_PREV, MOD_PREV, KEY_PREV);
+    RegisterHotKey(NULL, HOTKEY_ID_NEXT, MOD_NEXT, KEY_NEXT);
+    RegisterHotKey(NULL, HOTKEY_ID_MOVE_PREV, MOD_MOVE_PREV, KEY_MOVE_PREV);
+    RegisterHotKey(NULL, HOTKEY_ID_MOVE_NEXT, MOD_MOVE_NEXT, KEY_MOVE_NEXT);
+    RegisterHotKey(NULL, HOTKEY_ID_EXIT, MOD_EXIT, KEY_EXIT);
+    RegisterHotKey(NULL, HOTKEY_ID_NEW, MOD_NEW, KEY_NEW);
+    RegisterHotKey(NULL, HOTKEY_ID_REMOVE, MOD_REMOVE, KEY_REMOVE);
 
     while (GetMessage(&msg, NULL, 0, 0)) {
         if (msg.message == WM_HOTKEY) {
@@ -474,26 +418,5 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     if (g_provider) g_provider->lpVtbl->Release(g_provider);
 
     CoUninitialize();
-    {
-        typedef HRESULT (WINAPI *TDProc)(HWND, HINSTANCE, PCWSTR, PCWSTR, PCWSTR, int, PCWSTR, int*);
-        TDProc td = NULL;
-        HMODULE mod = LoadLibraryW(L"user32.dll");
-        if (mod) {
-            td = (TDProc)GetProcAddress(mod, "TaskDialog");
-            FreeLibrary(mod);
-        }
-        if (!td) {
-            mod = LoadLibraryW(L"comctl32.dll");
-            if (mod) {
-                td = (TDProc)GetProcAddress(mod, "TaskDialog");
-                FreeLibrary(mod);
-            }
-        }
-        if (td)
-            td(NULL, NULL, L"vdmanager", L"vdmanager has exited.",
-               NULL, TD_OK_BUTTON, TD_INFO_ICON, NULL);
-        else
-            MessageBoxW(NULL, L"vdmanager has exited.", L"vdmanager", MB_SETFOREGROUND | MB_SYSTEMMODAL | MB_ICONINFORMATION);
-    }
     return 0;
 }

@@ -13,10 +13,7 @@ $(TARGET): main.c
 
 size: $(TARGET)
 	@ls -lh $(TARGET)
-	@$(CC) -MM -MT $(TARGET) main.c 2>/dev/null; \
-	 echo "---"; \
-	 echo "To build with MSVC on Windows:"; \
-	 echo "  cl /O1 /GS- main.c /link /SUBSYSTEM:WINDOWS kernel32.lib user32.lib ole32.lib"
+	@$(CC) -MM -MT $(TARGET) main.c 2>/dev/null
 
 clean:
 	rm -f $(TARGET) $(TARGET:.exe=.o)
