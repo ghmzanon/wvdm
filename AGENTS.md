@@ -1,6 +1,6 @@
-# vdmanager — Lightweight Windows Virtual Desktop Switcher
+# vdmanager — suckless Windows Virtual Desktop Switcher
 
-Switches between Windows 10/11 virtual desktops, moves windows between desktops, creates/removes desktops, all via global hotkeys.
+Single-file C program (~510 LOC, ~6 KB PE32+) that switches between Windows 10/11 virtual desktops, moves windows, creates/removes desktops, and toggles last desktop — all via global hotkeys. Links only `kernel32`, `user32`, `ole32`. Zero dependencies, no CRT, no runtime config, no manifest, no external DLLs.
 
 ## How it works
 
@@ -18,6 +18,7 @@ Switches between Windows 10/11 virtual desktops, moves windows between desktops,
 | `Alt+Shift+1..9` | Move window + switch to desktop N |
 | `Ctrl+Alt+Left/Right` | Previous/next desktop |
 | `Ctrl+Alt+Shift+Left/Right` | Move window + switch to adjacent |
+| `Ctrl+Alt+Space` | Toggle last desktop |
 | `Ctrl+Alt+N` | Create new virtual desktop |
 | `Ctrl+Alt+W` | Close current virtual desktop |
 | `Ctrl+Alt+Q` | Quit |
@@ -28,11 +29,19 @@ Switches between Windows 10/11 virtual desktops, moves windows between desktops,
 make CC=x86_64-w64-mingw32-gcc
 ```
 
-To customize hotkeys, edit `config.h` before building.
+No configure step, no dependencies. Edit `config.h` before building to customize.
 
 ## Configuration
 
-All key bindings are in `config.h` — edit and rebuild.
+All behavior toggles and key bindings live in `config.h`:
+
+| Define | Default | Description |
+|---|---|---|
+| `SWITCH_AFTER_ACTION` | `1` | Set to `0` to stay on current desktop after move/create (removal always switches) |
+| `WRAP_ADJACENT` | `0` | Set to `1` to wrap around on adjacent navigation at edges |
+| `MOD_*` / `KEY_*` | | Key combination for each action |
+
+Edit, rebuild, done.
 
 ## Run
 

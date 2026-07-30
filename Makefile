@@ -2,8 +2,8 @@ TARGET = vdmanager.exe
 CC    ?= x86_64-w64-mingw32-gcc
 RC    ?= x86_64-w64-mingw32-windres
 
-CFLAGS   = -O2 -Os -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables
-LDFLAGS  = -Wl,--gc-sections -s -mwindows
+CFLAGS   = -O2 -Os -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables -nostdlib
+LDFLAGS  = -Wl,--gc-sections -Wl,-eWinMain -s -mwindows
 LIBS     = -lkernel32 -luser32 -lole32
 
 all: $(TARGET)
