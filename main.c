@@ -26,6 +26,8 @@ static const GUID IID_IApplicationViewCollection =
 #define HOTKEY_ID_MOVE_PREV  400
 #define HOTKEY_ID_MOVE_NEXT  401
 #define HOTKEY_ID_EXIT       500
+#define HOTKEY_ID_NEW        600
+#define HOTKEY_ID_REMOVE     601
 
 #define TD_OK_BUTTON      0x0001
 #define TD_INFO_ICON      MAKEINTRESOURCEW(-3)
@@ -333,6 +335,83 @@ static void move_window_to_adjacent_desktop(UINT direction)
     view->lpVtbl->Release(view);
 }
 
+static void create_virtual_desktop(void)
+{
+    IVirtualDesktop *desktop = NULL;
+    HRESULT hr = ensure_manager();
+    if (FAILED(hr)) return;
+
+    hr = g_manager->lpVtbl->CreateDesktop(g_manager, &desktop);
+    if (FAILED(hr) || !desktop) return;
+
+    g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
+    desktop->lpVtbl->Release(desktop);
+}
+
+static void remove_virtual_desktop(void)
+{
+    IVirtualDesktop *current = NULL;
+    IVirtualDesktop *fallback = NULL;
+    IObjectArray *desktops = NULL;
+    GUID cur_guid;
+    int idx;
+    UINT count;
+    HRESULT hr;
+
+    hr = ensure_manager();
+    if (FAILED(hr)) return;
+
+    hr = g_manager->lpVtbl->GetDesktops(g_manager, &desktops);
+    if (FAILED(hr) || !desktops) return;
+
+    hr = desktops->lpVtbl->GetCount(desktops, &count);
+    if (FAILED(hr) || count <= 1) {
+        desktops->lpVtbl->Release(desktops);
+        return;
+    }
+    desktops->lpVtbl->Release(desktops);
+
+    hr = g_manager->lpVtbl->GetCurrentDesktop(g_manager, &current);
+    if (FAILED(hr) || !current) return;
+
+    hr = g_manager->lpVtbl->GetDesktops(g_manager, &desktops);
+    if (FAILED(hr) || !desktops) {
+        current->lpVtbl->Release(current);
+        return;
+    }
+
+    hr = current->lpVtbl->GetId(current, &cur_guid);
+    if (FAILED(hr)) {
+        current->lpVtbl->Release(current);
+        desktops->lpVtbl->Release(desktops);
+        return;
+    }
+
+    idx = get_current_desktop_index(desktops, &cur_guid);
+    if (idx < 0) {
+        current->lpVtbl->Release(current);
+        desktops->lpVtbl->Release(desktops);
+        return;
+    }
+
+    hr = desktops->lpVtbl->GetCount(desktops, &count);
+
+    int target_idx = (idx == (int)count - 1) ? idx - 1 : idx + 1;
+
+    hr = desktops->lpVtbl->GetAt(desktops, (UINT)target_idx, &IID_IVirtualDesktop, (void**)&fallback);
+    desktops->lpVtbl->Release(desktops);
+    if (FAILED(hr) || !fallback) {
+        current->lpVtbl->Release(current);
+        return;
+    }
+
+    g_manager->lpVtbl->SwitchDesktop(g_manager, fallback);
+    g_manager->lpVtbl->RemoveDesktop(g_manager, current, fallback);
+
+    current->lpVtbl->Release(current);
+    fallback->lpVtbl->Release(fallback);
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                    LPSTR lpCmdLine, int nCmdShow)
 {
@@ -352,6 +431,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     RegisterHotKey(NULL, HOTKEY_ID_MOVE_PREV, MOD_CONTROL | MOD_WIN | MOD_SHIFT, VK_LEFT);
     RegisterHotKey(NULL, HOTKEY_ID_MOVE_NEXT, MOD_CONTROL | MOD_WIN | MOD_SHIFT, VK_RIGHT);
     RegisterHotKey(NULL, HOTKEY_ID_EXIT, MOD_ALT | MOD_CONTROL, 'Q');
+    RegisterHotKey(NULL, HOTKEY_ID_NEW, MOD_CONTROL | MOD_ALT, 'N');
+    RegisterHotKey(NULL, HOTKEY_ID_REMOVE, MOD_CONTROL | MOD_ALT, 'W');
 
     while (GetMessage(&msg, NULL, 0, 0)) {
         if (msg.message == WM_HOTKEY) {
@@ -369,6 +450,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 move_window_to_adjacent_desktop(0);
             else if (id == HOTKEY_ID_MOVE_NEXT)
                 move_window_to_adjacent_desktop(1);
+            else if (id == HOTKEY_ID_NEW)
+                create_virtual_desktop();
+            else if (id == HOTKEY_ID_REMOVE)
+                remove_virtual_desktop();
         }
     }
 
@@ -381,6 +466,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     UnregisterHotKey(NULL, HOTKEY_ID_MOVE_PREV);
     UnregisterHotKey(NULL, HOTKEY_ID_MOVE_NEXT);
     UnregisterHotKey(NULL, HOTKEY_ID_EXIT);
+    UnregisterHotKey(NULL, HOTKEY_ID_NEW);
+    UnregisterHotKey(NULL, HOTKEY_ID_REMOVE);
 
     if (g_view_collection) g_view_collection->lpVtbl->Release(g_view_collection);
     if (g_manager) g_manager->lpVtbl->Release(g_manager);
