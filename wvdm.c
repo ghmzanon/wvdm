@@ -138,6 +138,7 @@ static IVirtualDesktopManagerInternal *g_manager = NULL;
 static IApplicationViewCollection     *g_view_collection = NULL;
 static GUID                            g_last_desktop_guid = {0};
 static BOOL                            g_have_last = FALSE;
+static int                             g_hotkey_failures = 0;
 
 /* avoid CRT memcmp pulled in by IsEqualGUID macro */
 static BOOL guid_equal(GUID *a, GUID *b) {
@@ -156,16 +157,25 @@ static HRESULT ensure_manager(void) {
 		return S_OK;
 	}
 
-	HRESULT hr = CoCreateInstance(&CLSID_ImmersiveShell, NULL, CLSCTX_LOCAL_SERVER,
-								  &IID_IServiceProvider, (void**)&g_provider);
-	if (FAILED(hr)) {
-		return hr;
+	/* reuse an existing provider; a fresh CoCreateInstance would
+	 * overwrite g_provider and leak the previous reference */
+	if (!g_provider) {
+		HRESULT hr = CoCreateInstance(&CLSID_ImmersiveShell, NULL,
+			CLSCTX_LOCAL_SERVER, &IID_IServiceProvider, (void**)&g_provider);
+		if (FAILED(hr)) {
+			return hr;
+		}
 	}
 
-	hr = g_provider->lpVtbl->QueryService(g_provider,
+	HRESULT hr = g_provider->lpVtbl->QueryService(g_provider,
 		&CLSID_VirtualDesktopManagerInternal,
 		&IID_IVirtualDesktopManagerInternal,
 		(void**)&g_manager);
+	if (FAILED(hr)) {
+		/* drop the provider so a later retry can recreate it */
+		g_provider->lpVtbl->Release(g_provider);
+		g_provider = NULL;
+	}
 	return hr;
 }
 
@@ -330,13 +340,14 @@ static void switch_to_last_desktop(void) {
 		return;
 	}
 
+	/* remember the desktop we leave, so the toggle keeps working */
 	IVirtualDesktop *current = NULL;
 	GUID cur_guid;
-
 	if (SUCCEEDED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
 		&current)) && current) {
-		if (FAILED(current->lpVtbl->GetId(current, &cur_guid))) {
-			cur_guid = g_last_desktop_guid;
+		/* only read cur_guid when GetId succeeded */
+		if (SUCCEEDED(current->lpVtbl->GetId(current, &cur_guid))) {
+			g_last_desktop_guid = cur_guid;
 		}
 		current->lpVtbl->Release(current);
 	}
@@ -346,7 +357,6 @@ static void switch_to_last_desktop(void) {
 		return;
 	}
 
-	g_last_desktop_guid = cur_guid;
 	g_manager->lpVtbl->SwitchDesktop(g_manager, target);
 	target->lpVtbl->Release(target);
 }
@@ -519,6 +529,13 @@ static void print_help(void) {
 	MessageBoxW(NULL, help, L"wvdm", MB_OK);
 }
 
+/* count registration failures so the user learns about binding conflicts */
+static void register_hotkey(int id, UINT modifiers, UINT key) {
+	if (!RegisterHotKey(NULL, id, modifiers, key)) {
+		g_hotkey_failures++;
+	}
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 				   LPSTR lpCmdLine, int nCmdShow)
 {
@@ -527,15 +544,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	(void)nCmdShow;
 
 	if (lpCmdLine && lpCmdLine[0]) {
-		if (lstrcmpiA(lpCmdLine, "--help") == 0 || lstrcmpiA(lpCmdLine, "-h") == 0) {
+		/* lpCmdLine may start with the space separating it from the exe name */
+		LPSTR arg = lpCmdLine;
+		while (*arg == ' ' || *arg == '\t') {
+			arg++;
+		}
+		if (lstrcmpiA(arg, "--help") == 0 || lstrcmpiA(arg, "-h") == 0) {
 			print_help();
 			return 0;
 		}
-		if (lstrcmpiA(lpCmdLine, "--version") == 0 || lstrcmpiA(lpCmdLine,
-			"-v") == 0) {
+		if (lstrcmpiA(arg, "--version") == 0 || lstrcmpiA(arg, "-v") == 0) {
 			MessageBoxW(NULL, L"wvdm 1.0", L"wvdm", MB_OK);
 			return 0;
 		}
+		print_help();
+		return 1;
 	}
 
 	HRESULT hr;
@@ -547,18 +570,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	}
 
 	for (int i = 0; i < 9; i++) {
-		RegisterHotKey(NULL, HOTKEY_ID_BASE + i, MOD_SWITCH, KEY_SWITCH(i));
-		RegisterHotKey(NULL, HOTKEY_ID_MOVE + i, MOD_MOVE, KEY_MOVE(i));
+		register_hotkey(HOTKEY_ID_BASE + i, MOD_SWITCH, KEY_SWITCH(i));
+		register_hotkey(HOTKEY_ID_MOVE + i, MOD_MOVE, KEY_MOVE(i));
 	}
 
-	RegisterHotKey(NULL, HOTKEY_ID_PREV, MOD_PREV, KEY_PREV);
-	RegisterHotKey(NULL, HOTKEY_ID_NEXT, MOD_NEXT, KEY_NEXT);
-	RegisterHotKey(NULL, HOTKEY_ID_MOVE_PREV, MOD_MOVE_PREV, KEY_MOVE_PREV);
-	RegisterHotKey(NULL, HOTKEY_ID_MOVE_NEXT, MOD_MOVE_NEXT, KEY_MOVE_NEXT);
-	RegisterHotKey(NULL, HOTKEY_ID_EXIT, MOD_EXIT, KEY_EXIT);
-	RegisterHotKey(NULL, HOTKEY_ID_NEW, MOD_NEW, KEY_NEW);
-	RegisterHotKey(NULL, HOTKEY_ID_REMOVE, MOD_REMOVE, KEY_REMOVE);
-	RegisterHotKey(NULL, HOTKEY_ID_LAST, MOD_LAST, KEY_LAST);
+	register_hotkey(HOTKEY_ID_PREV, MOD_PREV, KEY_PREV);
+	register_hotkey(HOTKEY_ID_NEXT, MOD_NEXT, KEY_NEXT);
+	register_hotkey(HOTKEY_ID_MOVE_PREV, MOD_MOVE_PREV, KEY_MOVE_PREV);
+	register_hotkey(HOTKEY_ID_MOVE_NEXT, MOD_MOVE_NEXT, KEY_MOVE_NEXT);
+	register_hotkey(HOTKEY_ID_EXIT, MOD_EXIT, KEY_EXIT);
+	register_hotkey(HOTKEY_ID_NEW, MOD_NEW, KEY_NEW);
+	register_hotkey(HOTKEY_ID_REMOVE, MOD_REMOVE, KEY_REMOVE);
+	register_hotkey(HOTKEY_ID_LAST, MOD_LAST, KEY_LAST);
+
+	if (g_hotkey_failures) {
+		MessageBoxW(NULL, L"Some hotkeys failed to register", L"wvdm",
+			MB_OK | MB_ICONWARNING);
+	}
 
 	while (GetMessage(&msg, NULL, 0, 0)) {
 		if (msg.message == WM_HOTKEY) {
