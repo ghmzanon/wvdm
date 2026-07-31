@@ -239,22 +239,22 @@ static IVirtualDesktop *get_desktop_at(int index) {
 }
 
 static IVirtualDesktop *get_adjacent_desktop(UINT direction) {
-	IVirtualDesktop *current = NULL;
+	IVirtualDesktop *current_desktop = NULL;
 	IObjectArray *desktops = NULL;
-	IVirtualDesktop *target = NULL;
+	IVirtualDesktop *adjacent_desktop = NULL;
 	GUID cur_guid;
 	UINT count;
 	int idx;
 
 	if (FAILED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
-		&current)) || !current) {
+		&current_desktop)) || !current_desktop) {
 		return NULL;
 	}
-	if (FAILED(current->lpVtbl->GetId(current, &cur_guid))) {
-		current->lpVtbl->Release(current);
+	if (FAILED(current_desktop->lpVtbl->GetId(current_desktop, &cur_guid))) {
+		current_desktop->lpVtbl->Release(current_desktop);
 		return NULL;
 	}
-	current->lpVtbl->Release(current);
+	current_desktop->lpVtbl->Release(current_desktop);
 
 	if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops)) || !desktops) {
 		return NULL;
@@ -278,26 +278,42 @@ static IVirtualDesktop *get_adjacent_desktop(UINT direction) {
 		}
 	}
 
-	int target_idx = (direction == 0)
+	int desktop_idx = (direction == 0)
 		? (idx == 0 ? (int)count - 1 : idx - 1)
 		: (idx == (int)count - 1 ? 0 : idx + 1);
 
-	HRESULT hr = desktops->lpVtbl->GetAt(desktops, (UINT)target_idx,
-		&IID_IVirtualDesktop, (void**)&target);
+	HRESULT hr = desktops->lpVtbl->GetAt(desktops, (UINT)desktop_idx,
+		&IID_IVirtualDesktop, (void**)&adjacent_desktop);
 	desktops->lpVtbl->Release(desktops);
-	return SUCCEEDED(hr) ? target : NULL;
+	return SUCCEEDED(hr) ? adjacent_desktop : NULL;
 }
 
-static void save_last_desktop(void) {
-	IVirtualDesktop *current = NULL;
+/* record the desktop we leave, unless it is the one we switch to */
+static void save_last_desktop(GUID *desktop_guid) {
+	IVirtualDesktop *current_desktop = NULL;
 	if (FAILED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
-		&current)) || !current) {
+		&current_desktop)) || !current_desktop) {
 		return;
 	}
-	if (SUCCEEDED(current->lpVtbl->GetId(current, &g_last_desktop_guid))) {
-		g_have_last = TRUE;
+	GUID cur_guid;
+	if (SUCCEEDED(current_desktop->lpVtbl->GetId(current_desktop, &cur_guid))) {
+		if (!guid_equal(&cur_guid, desktop_guid)) {
+			g_last_desktop_guid = cur_guid;
+			g_have_last = TRUE;
+		}
 	}
-	current->lpVtbl->Release(current);
+	current_desktop->lpVtbl->Release(current_desktop);
+}
+
+/* switch to the given desktop, remembering the one we leave */
+static void switch_to(IVirtualDesktop *desktop) {
+	GUID d_guid;
+	if (FAILED(desktop->lpVtbl->GetId(desktop, &d_guid))) {
+		g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
+		return;
+	}
+	save_last_desktop(&d_guid);
+	g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
 }
 
 static IVirtualDesktop *get_desktop_by_guid(GUID *guid) {
@@ -342,26 +358,28 @@ static void switch_to_last_desktop(void) {
 
 	/* remember the desktop we leave, so the toggle keeps working;
 	 * lookup must use the stored GUID before we overwrite it below */
-	IVirtualDesktop *current = NULL;
+	IVirtualDesktop *current_desktop = NULL;
 	GUID cur_guid = g_last_desktop_guid;
 	if (SUCCEEDED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
-		&current)) && current) {
+		&current_desktop)) && current_desktop) {
 		GUID c;
 		/* only read c when GetId succeeded */
-		if (SUCCEEDED(current->lpVtbl->GetId(current, &c))) {
+		if (SUCCEEDED(current_desktop->lpVtbl->GetId(current_desktop, &c))) {
 			cur_guid = c;
 		}
-		current->lpVtbl->Release(current);
+		current_desktop->lpVtbl->Release(current_desktop);
 	}
 
-	IVirtualDesktop *target = get_desktop_by_guid(&g_last_desktop_guid);
-	if (!target) {
+	IVirtualDesktop *last_desktop = get_desktop_by_guid(&g_last_desktop_guid);
+	if (!last_desktop) {
+		/* the stored desktop no longer exists; clear the stale state */
+		g_have_last = FALSE;
 		return;
 	}
 
 	g_last_desktop_guid = cur_guid;
-	g_manager->lpVtbl->SwitchDesktop(g_manager, target);
-	target->lpVtbl->Release(target);
+	g_manager->lpVtbl->SwitchDesktop(g_manager, last_desktop);
+	last_desktop->lpVtbl->Release(last_desktop);
 }
 
 static void switch_to_desktop(int index) {
@@ -372,8 +390,7 @@ static void switch_to_desktop(int index) {
 	if (!desktop) {
 		return;
 	}
-	save_last_desktop();
-	g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
+	switch_to(desktop);
 	desktop->lpVtbl->Release(desktop);
 }
 
@@ -405,8 +422,7 @@ static void move_window_to_desktop(int index) {
 
 	g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view, desktop);
 	if (SWITCH_AFTER_ACTION) {
-		save_last_desktop();
-		g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
+		switch_to(desktop);
 	}
 
 	desktop->lpVtbl->Release(desktop);
@@ -417,13 +433,12 @@ static void switch_to_adjacent_desktop(UINT direction) {
 	if (FAILED(ensure_manager())) {
 		return;
 	}
-	IVirtualDesktop *target = get_adjacent_desktop(direction);
-	if (!target) {
+	IVirtualDesktop *adjacent_desktop = get_adjacent_desktop(direction);
+	if (!adjacent_desktop) {
 		return;
 	}
-	save_last_desktop();
-	g_manager->lpVtbl->SwitchDesktop(g_manager, target);
-	target->lpVtbl->Release(target);
+	switch_to(adjacent_desktop);
+	adjacent_desktop->lpVtbl->Release(adjacent_desktop);
 }
 
 static void move_window_to_adjacent_desktop(UINT direction) {
@@ -434,7 +449,7 @@ static void move_window_to_adjacent_desktop(UINT direction) {
 
 	HRESULT hr;
 	IApplicationView *view = NULL;
-	IVirtualDesktop *target = NULL;
+	IVirtualDesktop *adjacent_desktop = NULL;
 
 	hr = ensure_view_collection();
 	if (FAILED(hr)) {
@@ -446,19 +461,18 @@ static void move_window_to_adjacent_desktop(UINT direction) {
 		return;
 	}
 
-	target = get_adjacent_desktop(direction);
-	if (!target) {
+	adjacent_desktop = get_adjacent_desktop(direction);
+	if (!adjacent_desktop) {
 		view->lpVtbl->Release(view);
 		return;
 	}
 
-	g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view, target);
+	g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view, adjacent_desktop);
 	if (SWITCH_AFTER_ACTION) {
-		save_last_desktop();
-		g_manager->lpVtbl->SwitchDesktop(g_manager, target);
+		switch_to(adjacent_desktop);
 	}
 
-	target->lpVtbl->Release(target);
+	adjacent_desktop->lpVtbl->Release(adjacent_desktop);
 	view->lpVtbl->Release(view);
 }
 
@@ -475,42 +489,40 @@ static void create_virtual_desktop(void) {
 	}
 
 	if (SWITCH_AFTER_ACTION) {
-		save_last_desktop();
-		g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
+		switch_to(desktop);
 	}
 
 	desktop->lpVtbl->Release(desktop);
 }
 
 static void remove_virtual_desktop(void) {
-	IVirtualDesktop *current = NULL;
-	IVirtualDesktop *fallback = NULL;
+	IVirtualDesktop *current_desktop = NULL;
+	IVirtualDesktop *fallback_desktop = NULL;
 
 	if (FAILED(ensure_manager())) {
 		return;
 	}
 
 	if (FAILED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
-		&current)) || !current) {
+		&current_desktop)) || !current_desktop) {
 		return;
 	}
 
-	fallback = get_adjacent_desktop(1);
-	if (!fallback) {
-		fallback = get_adjacent_desktop(0);
+	fallback_desktop = get_adjacent_desktop(1);
+	if (!fallback_desktop) {
+		fallback_desktop = get_adjacent_desktop(0);
 	}
-	if (!fallback) {
-		current->lpVtbl->Release(current);
+	if (!fallback_desktop) {
+		current_desktop->lpVtbl->Release(current_desktop);
 		return;
 	}
 
-	save_last_desktop();
-	g_manager->lpVtbl->SwitchDesktop(g_manager, fallback);
+	switch_to(fallback_desktop);
 	/* RemoveDesktop(this, fallbackDesktop, desktopToRemove) */
-	g_manager->lpVtbl->RemoveDesktop(g_manager, fallback, current);
+	g_manager->lpVtbl->RemoveDesktop(g_manager, fallback_desktop, current_desktop);
 
-	current->lpVtbl->Release(current);
-	fallback->lpVtbl->Release(fallback);
+	current_desktop->lpVtbl->Release(current_desktop);
+	fallback_desktop->lpVtbl->Release(fallback_desktop);
 }
 
 static void print_help(void) {
