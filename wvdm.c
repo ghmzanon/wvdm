@@ -199,12 +199,12 @@ static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid) {
 		IVirtualDesktop *d = NULL;
 		GUID guid;
 		hr = desktops->lpVtbl->GetAt(desktops, i, &IID_IVirtualDesktop, (void**)&d);
-		if (FAILED(hr) || !d) continue; {
+		if (FAILED(hr) || !d) {
 			continue;
 		}
 		hr = d->lpVtbl->GetId(d, &guid);
 		d->lpVtbl->Release(d);
-		if (FAILED(hr)) continue; {
+		if (FAILED(hr)) {
 			continue;
 		}
 		if (guid_equal(&guid, cur_guid)) {
@@ -323,6 +323,9 @@ static IVirtualDesktop *get_desktop_by_guid(GUID *guid) {
 }
 
 static void switch_to_last_desktop(void) {
+	if (FAILED(ensure_manager())) {
+		return;
+	}
 	if (!g_have_last) {
 		return;
 	}
@@ -480,7 +483,7 @@ static void remove_virtual_desktop(void) {
 	}
 
 	fallback = get_adjacent_desktop(1);
-	if (!fallback) fallback = get_adjacent_desktop(0); {
+	if (!fallback) {
 		fallback = get_adjacent_desktop(0);
 	}
 	if (!fallback) {
@@ -519,6 +522,10 @@ static void print_help(void) {
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 				   LPSTR lpCmdLine, int nCmdShow)
 {
+	(void)hInstance;
+	(void)hPrevInstance;
+	(void)nCmdShow;
+
 	if (lpCmdLine && lpCmdLine[0]) {
 		if (lstrcmpiA(lpCmdLine, "--help") == 0 || lstrcmpiA(lpCmdLine, "-h") == 0) {
 			print_help();
@@ -556,7 +563,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	while (GetMessage(&msg, NULL, 0, 0)) {
 		if (msg.message == WM_HOTKEY) {
 			UINT id = (UINT)msg.wParam;
-			if (id == HOTKEY_ID_EXIT) break; {
+			if (id == HOTKEY_ID_EXIT) {
 				break;
 			}
 			if (id >= HOTKEY_ID_BASE && id < HOTKEY_ID_BASE + 9) {
@@ -594,13 +601,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	UnregisterHotKey(NULL, HOTKEY_ID_REMOVE);
 	UnregisterHotKey(NULL, HOTKEY_ID_LAST);
 
-	if (g_view_collection) g_view_collection->lpVtbl->Release(g_view_collection); {
+	if (g_view_collection) {
 		g_view_collection->lpVtbl->Release(g_view_collection);
 	}
-	if (g_manager) g_manager->lpVtbl->Release(g_manager); {
+	if (g_manager) {
 		g_manager->lpVtbl->Release(g_manager);
 	}
-	if (g_provider) g_provider->lpVtbl->Release(g_provider); {
+	if (g_provider) {
 		g_provider->lpVtbl->Release(g_provider);
 	}
 
