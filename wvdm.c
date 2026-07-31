@@ -340,14 +340,16 @@ static void switch_to_last_desktop(void) {
 		return;
 	}
 
-	/* remember the desktop we leave, so the toggle keeps working */
+	/* remember the desktop we leave, so the toggle keeps working;
+	 * lookup must use the stored GUID before we overwrite it below */
 	IVirtualDesktop *current = NULL;
-	GUID cur_guid;
+	GUID cur_guid = g_last_desktop_guid;
 	if (SUCCEEDED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
 		&current)) && current) {
-		/* only read cur_guid when GetId succeeded */
-		if (SUCCEEDED(current->lpVtbl->GetId(current, &cur_guid))) {
-			g_last_desktop_guid = cur_guid;
+		GUID c;
+		/* only read c when GetId succeeded */
+		if (SUCCEEDED(current->lpVtbl->GetId(current, &c))) {
+			cur_guid = c;
 		}
 		current->lpVtbl->Release(current);
 	}
@@ -357,6 +359,7 @@ static void switch_to_last_desktop(void) {
 		return;
 	}
 
+	g_last_desktop_guid = cur_guid;
 	g_manager->lpVtbl->SwitchDesktop(g_manager, target);
 	target->lpVtbl->Release(target);
 }
@@ -536,9 +539,8 @@ static void register_hotkey(int id, UINT modifiers, UINT key) {
 	}
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
-				   LPSTR lpCmdLine, int nCmdShow)
-{
+static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+	LPSTR lpCmdLine, int nCmdShow) {
 	(void)hInstance;
 	(void)hPrevInstance;
 	(void)nCmdShow;
@@ -641,4 +643,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
 	CoUninitialize();
 	return 0;
+}
+
+/* no CRT: returning from the entry point never terminates the process,
+ * so exit explicitly with the result of the real main */
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+				   LPSTR lpCmdLine, int nCmdShow) {
+	ExitProcess(wvdm_main(hInstance, hPrevInstance, lpCmdLine, nCmdShow));
 }
