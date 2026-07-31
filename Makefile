@@ -1,4 +1,4 @@
-TARGET = vdmanager.exe
+TARGET = wvdm.exe
 CC    ?= x86_64-w64-mingw32-gcc
 RC    ?= x86_64-w64-mingw32-windres
 
@@ -8,12 +8,12 @@ LIBS     = -lkernel32 -luser32 -lole32
 
 all: $(TARGET)
 
-$(TARGET): main.c config.h
+$(TARGET): wvdm.c config.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 
 size: $(TARGET)
 	@ls -lh $(TARGET)
-	@$(CC) -MM -MT $(TARGET) main.c 2>/dev/null
+	@$(CC) -MM -MT $(TARGET) wvdm.c 2>/dev/null
 
 clean:
 	rm -f $(TARGET) $(TARGET:.exe=.o)

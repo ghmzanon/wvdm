@@ -499,7 +499,7 @@ static void remove_virtual_desktop(void) {
 
 static void print_help(void) {
 	static const WCHAR *help =
-		L"vdmanager - virtual desktop switcher\n"
+		L"wvdm - windows virtual desktop manager\n"
 		L"\n"
 		L"  --help, -h        show this message\n"
 		L"  --version, -v     show version\n"
@@ -513,7 +513,7 @@ static void print_help(void) {
 		L"  Ctrl+Alt+N                 create new desktop\n"
 		L"  Ctrl+Alt+W                 close current desktop\n"
 		L"  Ctrl+Alt+Q                 quit\n";
-	MessageBoxW(NULL, help, L"vdmanager", MB_OK);
+	MessageBoxW(NULL, help, L"wvdm", MB_OK);
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
@@ -526,7 +526,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		}
 		if (lstrcmpiA(lpCmdLine, "--version") == 0 || lstrcmpiA(lpCmdLine,
 			"-v") == 0) {
-			MessageBoxW(NULL, L"vdmanager 1.0", L"vdmanager", MB_OK);
+			MessageBoxW(NULL, L"wvdm 1.0", L"wvdm", MB_OK);
 			return 0;
 		}
 	}
