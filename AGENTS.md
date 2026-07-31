@@ -1,6 +1,6 @@
 # wvdm — suckless Windows Virtual Desktop Manager
 
-Single-file C program (~510 LOC, ~6 KB PE32+) that switches between Windows
+Single-file C program that switches between Windows
 10/11 virtual desktops via global hotkeys. User-facing docs (hotkeys, build,
 configuration, license) live in `README.md`.
 
@@ -17,7 +17,7 @@ configuration, license) live in `README.md`.
 ## Build
 
 ```
-make CC=x86_64-w64-mingw32-gcc
+make
 ```
 
 No configure step, no dependencies. Edit `config.h` before building to

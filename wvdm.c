@@ -139,6 +139,7 @@ static IApplicationViewCollection     *g_view_collection = NULL;
 static GUID                            g_last_desktop_guid = {0};
 static BOOL                            g_have_last = FALSE;
 static int                             g_hotkey_failures = 0;
+static HANDLE                          g_single_mutex = NULL;
 
 /* avoid CRT memcmp pulled in by IsEqualGUID macro */
 static BOOL guid_equal(GUID *a, GUID *b) {
@@ -575,6 +576,12 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		return 1;
 	}
 
+	/* one instance per logon session; a second launch exits silently */
+	g_single_mutex = CreateMutex(NULL, FALSE, "Local\\wvdm");
+	if (GetLastError() == ERROR_ALREADY_EXISTS) {
+		return 0;
+	}
+
 	HRESULT hr;
 	MSG msg = {0};
 
@@ -651,6 +658,9 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	}
 	if (g_provider) {
 		g_provider->lpVtbl->Release(g_provider);
+	}
+	if (g_single_mutex) {
+		CloseHandle(g_single_mutex);
 	}
 
 	CoUninitialize();

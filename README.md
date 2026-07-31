@@ -1,6 +1,6 @@
 # wvdm — suckless Windows Virtual Desktop Manager
 
-wvdm 1.0 — single-file C program (~510 LOC, ~6 KB PE32+) that switches
+wvdm 1.0 — single-file C program that switches
 between Windows 10/11 virtual desktops, moves windows, creates/removes
 desktops, and toggles last desktop — all via global hotkeys. Links only
 `kernel32`, `user32`, `ole32`. Zero dependencies, no CRT, no runtime config,
@@ -30,14 +30,25 @@ no manifest, no external DLLs.
 
 ## Build
 
-Requires MinGW-w64 (`x86_64-w64-mingw32-gcc`).
+Dependencies: `make` and a MinGW-w64 cross-compiler (`x86_64-w64-mingw32-gcc`).
+
+| Distro | Install |
+|---|---|
+| Debian/Ubuntu | `sudo apt install gcc-mingw-w64-x86-64 make` |
+| Fedora | `sudo dnf install mingw64-gcc make` |
+| Arch | `sudo pacman -S mingw-w64-gcc make` |
+
+Then:
 
 ```
-make CC=x86_64-w64-mingw32-gcc
+make
 ```
 
-No configure step, no dependencies. Edit `config.h` before building to
-customize.
+Copy the single `wvdm.exe` to the Windows machine — no DLLs or other files
+needed. Edit `config.h` before building to customize.
+
+Building from Windows works too: run the Linux steps inside WSL2, then grab
+`wvdm.exe` from the WSL filesystem at `\\wsl$\<distro>\<path>`.
 
 ## Configuration
 
@@ -54,7 +65,24 @@ Edit, rebuild, done.
 ## Run
 
 Double-click `wvdm.exe` or launch from terminal. No window appears —
-runs as a background process. Press `Ctrl+Alt+Q` to exit cleanly.
+runs as a background process. Press `Ctrl+Alt+Q` to exit cleanly. Only one
+instance runs at a time — a second launch exits silently.
+
+## Autostart
+
+Windows runs anything in the Startup folder at logon. Just copy the exe there:
+
+1. `Win+R`, type `shell:startup`, press Enter
+2. Copy `wvdm.exe` (or a shortcut to it) into the folder
+
+No need for `shell:startup`: the folder has a plain path, so a terminal works:
+
+| Shell | Command |
+|---|---|
+| cmd | `copy wvdm.exe "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\"` |
+| PowerShell | `Copy-Item wvdm.exe "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\"` |
+
+To uninstall: delete the file from the folder.
 
 ## License
 
