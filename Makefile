@@ -8,7 +8,7 @@ LIBS     = -lkernel32 -luser32 -lole32
 
 all: $(TARGET)
 
-$(TARGET): main.c
+$(TARGET): main.c config.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 
 size: $(TARGET)
