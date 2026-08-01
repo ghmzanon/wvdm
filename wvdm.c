@@ -659,7 +659,11 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		if (msg.message == WM_HOTKEY) {
 			UINT id = (UINT)msg.wParam;
 			if (id == HOTKEY_ID_EXIT) {
-				break;
+				/* graceful teardown can block on the shell COM release or
+				 * CoUninitialize, leaving the process in the task manager;
+				 * hard-exit instead — process death reclaims hotkeys and
+				 * COM state */
+				TerminateProcess(GetCurrentProcess(), 0);
 			}
 			if (id >= HOTKEY_ID_BASE && id < HOTKEY_ID_BASE + MAX_DESKTOPS) {
 				switch_to_desktop((int)(id - HOTKEY_ID_BASE));
@@ -683,39 +687,19 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		}
 	}
 
-	for (int i = 0; i < MAX_DESKTOPS; i++) {
-		UnregisterHotKey(NULL, HOTKEY_ID_BASE + i);
-		UnregisterHotKey(NULL, HOTKEY_ID_MOVE + i);
-	}
-	UnregisterHotKey(NULL, HOTKEY_ID_PREV);
-	UnregisterHotKey(NULL, HOTKEY_ID_NEXT);
-	UnregisterHotKey(NULL, HOTKEY_ID_MOVE_PREV);
-	UnregisterHotKey(NULL, HOTKEY_ID_MOVE_NEXT);
-	UnregisterHotKey(NULL, HOTKEY_ID_EXIT);
-	UnregisterHotKey(NULL, HOTKEY_ID_NEW);
-	UnregisterHotKey(NULL, HOTKEY_ID_REMOVE);
-	UnregisterHotKey(NULL, HOTKEY_ID_LAST);
-
-	if (g_view_collection) {
-		g_view_collection->lpVtbl->Release(g_view_collection);
-	}
-	if (g_manager) {
-		g_manager->lpVtbl->Release(g_manager);
-	}
-	if (g_provider) {
-		g_provider->lpVtbl->Release(g_provider);
-	}
-	if (g_single_mutex) {
-		CloseHandle(g_single_mutex);
-	}
-
-	CoUninitialize();
+	/* the EXIT hotkey terminates the process in the message loop above;
+	 * this return only covers a GetMessage error or an unexpected WM_QUIT */
 	return 0;
 }
 
-/* no CRT: returning from the entry point never terminates the process,
- * so exit explicitly with the result of the real main */
+/* no CRT: returning from the entry point never terminates the process, and
+ * ExitProcess can block on ole32 teardown after shell COM use, leaving a
+ * lingering process; hard-terminate instead */
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 				   LPSTR lpCmdLine, int nCmdShow) {
-	ExitProcess(wvdm_main(hInstance, hPrevInstance, lpCmdLine, nCmdShow));
+	TerminateProcess(GetCurrentProcess(), wvdm_main(hInstance, hPrevInstance,
+		lpCmdLine, nCmdShow));
+	/* TerminateProcess on the current process never returns; this return is
+	 * unreachable, but satisfies gcc's -Wreturn-type check */
+	return 0;
 }
