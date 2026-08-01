@@ -9,30 +9,30 @@
 /* numbered-desktop hotkeys (Alt+1..9); desktop creation stops at this cap */
 #define MAX_DESKTOPS    9
 
-#define MOD_SWITCH      MOD_ALT
+#define MOD_SWITCH      MOD_ALT | MOD_NOREPEAT
 #define KEY_SWITCH(n)   ('1' + (n))
 
-#define MOD_MOVE        MOD_ALT | MOD_SHIFT
+#define MOD_MOVE        MOD_ALT | MOD_SHIFT | MOD_NOREPEAT
 #define KEY_MOVE(n)     ('1' + (n))
 
-#define MOD_PREV        MOD_CONTROL | MOD_ALT
+#define MOD_PREV        MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
 #define KEY_PREV        VK_LEFT
-#define MOD_NEXT        MOD_CONTROL | MOD_ALT
+#define MOD_NEXT        MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
 #define KEY_NEXT        VK_RIGHT
 
-#define MOD_MOVE_PREV   MOD_CONTROL | MOD_ALT | MOD_SHIFT
+#define MOD_MOVE_PREV   MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT
 #define KEY_MOVE_PREV   VK_LEFT
-#define MOD_MOVE_NEXT   MOD_CONTROL | MOD_ALT | MOD_SHIFT
+#define MOD_MOVE_NEXT   MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT
 #define KEY_MOVE_NEXT   VK_RIGHT
 
-#define MOD_LAST        MOD_CONTROL | MOD_ALT
+#define MOD_LAST        MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
 #define KEY_LAST        VK_SPACE
 
-#define MOD_EXIT        MOD_CONTROL | MOD_ALT
+#define MOD_EXIT        MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
 #define KEY_EXIT        'Q'
 
-#define MOD_NEW         MOD_CONTROL | MOD_ALT
+#define MOD_NEW         MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
 #define KEY_NEW         'N'
 
-#define MOD_REMOVE      MOD_CONTROL | MOD_ALT
+#define MOD_REMOVE      MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
 #define KEY_REMOVE      'W'

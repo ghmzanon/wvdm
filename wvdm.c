@@ -28,6 +28,9 @@ static const GUID IID_IApplicationViewCollection =
 #define HOTKEY_ID_REMOVE    601
 #define HOTKEY_ID_LAST      700
 
+#define ADJ_PREV            0
+#define ADJ_NEXT            1
+
 typedef struct IObjectArrayVtbl IObjectArrayVtbl;
 typedef struct IObjectArray {
 	const IObjectArrayVtbl *lpVtbl;
@@ -146,15 +149,35 @@ static int                             g_hotkey_failures = 0;
 static HANDLE                          g_single_mutex = NULL;
 static const WCHAR                     kVersion[] = L"wvdm 1.0";
 
+/* --- GUID helpers --- */
+
 /* avoid CRT memcmp pulled in by IsEqualGUID macro */
-static BOOL guid_equal(GUID *a, GUID *b) {
+static BOOL guid_equal(const GUID *a, const GUID *b) {
 	return a->Data1 == b->Data1 && a->Data2 == b->Data2
-		&& a->Data3 == b->Data3
-		&& a->Data4[0] == b->Data4[0] && a->Data4[1] == b->Data4[1]
-		&& a->Data4[2] == b->Data4[2] && a->Data4[3] == b->Data4[3]
-		&& a->Data4[4] == b->Data4[4] && a->Data4[5] == b->Data4[5]
-		&& a->Data4[6] == b->Data4[6] && a->Data4[7] == b->Data4[7];
+		&& a->Data3 == b->Data3 && a->Data4[0] == b->Data4[0]
+		&& a->Data4[1] == b->Data4[1] && a->Data4[2] == b->Data4[2]
+		&& a->Data4[3] == b->Data4[3] && a->Data4[4] == b->Data4[4]
+		&& a->Data4[5] == b->Data4[5] && a->Data4[6] == b->Data4[6]
+		&& a->Data4[7] == b->Data4[7];
 }
+
+static BOOL get_desktop_guid(IVirtualDesktop *desktop, GUID *guid) {
+	return SUCCEEDED(desktop->lpVtbl->GetId(desktop, guid));
+}
+
+/* fetch the GUID of the desktop we are on; FALSE on any failure */
+static BOOL get_current_desktop_guid(GUID *guid) {
+	IVirtualDesktop *current_desktop = NULL;
+	if (FAILED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
+		&current_desktop)) || !current_desktop) {
+		return FALSE;
+	}
+	BOOL ok = get_desktop_guid(current_desktop, guid);
+	current_desktop->lpVtbl->Release(current_desktop);
+	return ok;
+}
+
+/* --- COM bootstrap --- */
 
 /* resolve IServiceProvider from CLSID_ImmersiveShell,
  * then query IVirtualDesktopManagerInternal from it */
@@ -202,6 +225,8 @@ static HRESULT ensure_view_collection(void) {
 		(void**)&g_view_collection);
 }
 
+/* --- desktop lookup --- */
+
 static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid) {
 	UINT count = 0;
 	HRESULT hr = desktops->lpVtbl->GetCount(desktops, &count);
@@ -211,15 +236,14 @@ static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid) {
 
 	for (UINT i = 0; i < count; i++) {
 		IVirtualDesktop *desktop = NULL;
-		hr = desktops->lpVtbl->GetAt(desktops, i, &IID_IVirtualDesktop,
-			(void**)&desktop);
-		if (FAILED(hr) || !desktop) {
+		if (FAILED(desktops->lpVtbl->GetAt(desktops, i, &IID_IVirtualDesktop,
+			(void**)&desktop)) || !desktop) {
 			continue;
 		}
 		GUID guid;
-		hr = desktop->lpVtbl->GetId(desktop, &guid);
+		BOOL ok = get_desktop_guid(desktop, &guid);
 		desktop->lpVtbl->Release(desktop);
-		if (FAILED(hr)) {
+		if (!ok) {
 			continue;
 		}
 		if (guid_equal(&guid, cur_guid)) {
@@ -243,19 +267,43 @@ static IVirtualDesktop *get_desktop_at(int index) {
 	return SUCCEEDED(hr) ? desktop : NULL;
 }
 
-static IVirtualDesktop *get_adjacent_desktop(UINT direction) {
-	IVirtualDesktop *current_desktop = NULL;
+static IVirtualDesktop *get_desktop_by_guid(GUID *guid) {
+	IObjectArray *desktops = NULL;
 
-	if (FAILED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
-		&current_desktop)) || !current_desktop) {
+	if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops)) || !desktops) {
 		return NULL;
 	}
+
+	UINT count;
+	if (FAILED(desktops->lpVtbl->GetCount(desktops, &count))) {
+		desktops->lpVtbl->Release(desktops);
+		return NULL;
+	}
+
+	IVirtualDesktop *desktop = NULL;
+	for (UINT i = 0; i < count; i++) {
+		IVirtualDesktop *d = NULL;
+		GUID d_guid;
+		if (FAILED(desktops->lpVtbl->GetAt(desktops, i, &IID_IVirtualDesktop,
+			(void**)&d)) || !d) {
+			continue;
+		}
+		if (get_desktop_guid(d, &d_guid) && guid_equal(&d_guid, guid)) {
+			desktop = d;
+			break;
+		}
+		d->lpVtbl->Release(d);
+	}
+
+	desktops->lpVtbl->Release(desktops);
+	return desktop;
+}
+
+static IVirtualDesktop *get_adjacent_desktop(UINT direction) {
 	GUID cur_guid;
-	if (FAILED(current_desktop->lpVtbl->GetId(current_desktop, &cur_guid))) {
-		current_desktop->lpVtbl->Release(current_desktop);
+	if (!get_current_desktop_guid(&cur_guid)) {
 		return NULL;
 	}
-	current_desktop->lpVtbl->Release(current_desktop);
 
 	IObjectArray *desktops = NULL;
 	if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops)) || !desktops) {
@@ -273,17 +321,19 @@ static IVirtualDesktop *get_adjacent_desktop(UINT direction) {
 		desktops->lpVtbl->Release(desktops);
 		return NULL;
 	}
+	int last = (int)count - 1;
 
 	if (!WRAP_ADJACENT) {
-		if ((direction == 0 && idx == 0) || (direction != 0 && idx == (int)count - 1)) {
+		if ((direction == ADJ_PREV && idx == 0)
+			|| (direction == ADJ_NEXT && idx == last)) {
 			desktops->lpVtbl->Release(desktops);
 			return NULL;
 		}
 	}
 
-	int desktop_idx = (direction == 0)
-		? (idx == 0 ? (int)count - 1 : idx - 1)
-		: (idx == (int)count - 1 ? 0 : idx + 1);
+	int desktop_idx = (direction == ADJ_PREV)
+		? (idx == 0 ? last : idx - 1)
+		: (idx == last ? 0 : idx + 1);
 
 	IVirtualDesktop *adjacent_desktop = NULL;
 	HRESULT hr = desktops->lpVtbl->GetAt(desktops, (UINT)desktop_idx,
@@ -292,22 +342,7 @@ static IVirtualDesktop *get_adjacent_desktop(UINT direction) {
 	return SUCCEEDED(hr) ? adjacent_desktop : NULL;
 }
 
-/* record the desktop we leave, unless it is the one we switch to */
-static void save_last_desktop(GUID *desktop_guid) {
-	IVirtualDesktop *current_desktop = NULL;
-	if (FAILED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
-		&current_desktop)) || !current_desktop) {
-		return;
-	}
-	GUID cur_guid;
-	if (SUCCEEDED(current_desktop->lpVtbl->GetId(current_desktop, &cur_guid))) {
-		if (!guid_equal(&cur_guid, desktop_guid)) {
-			g_last_desktop_guid = cur_guid;
-			g_have_last = TRUE;
-		}
-	}
-	current_desktop->lpVtbl->Release(current_desktop);
-}
+/* --- switch core --- */
 
 /* hand the foreground to the taskbar before switching, so no app window owns
  * it across the switch; returns the taskbar handle to release afterwards */
@@ -348,105 +383,41 @@ static void taskbar_release_foreground(HWND taskbar) {
 	}
 }
 
+/* hand the foreground to the taskbar, switch, and hand it back */
+static void switch_desktop(IVirtualDesktop *desktop) {
+	HWND taskbar = taskbar_grab_foreground();
+	g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
+	taskbar_release_foreground(taskbar);
+}
+
 /* switch to the given desktop, remembering the one we leave */
 static void switch_to(IVirtualDesktop *desktop) {
 	GUID d_guid;
-
-	if (FAILED(desktop->lpVtbl->GetId(desktop, &d_guid))) {
-		HWND taskbar = taskbar_grab_foreground();
-		g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
-		taskbar_release_foreground(taskbar);
+	if (!get_desktop_guid(desktop, &d_guid)) {
+		/* cannot identify the target; switch without bookkeeping */
+		switch_desktop(desktop);
 		return;
 	}
 
 	/* a hotkey for the desktop we are already on is a no-op: no switch, no
 	 * taskbar churn, and no last-desktop bookkeeping */
-	IVirtualDesktop *current_desktop = NULL;
-	if (SUCCEEDED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
-		&current_desktop)) && current_desktop) {
-		BOOL same = FALSE;
-		GUID cur_guid;
-		if (SUCCEEDED(current_desktop->lpVtbl->GetId(current_desktop,
-			&cur_guid))) {
-			same = guid_equal(&d_guid, &cur_guid);
-		}
-		current_desktop->lpVtbl->Release(current_desktop);
-		if (same) {
+	GUID cur_guid;
+	if (get_current_desktop_guid(&cur_guid)) {
+		if (guid_equal(&d_guid, &cur_guid)) {
 			return;
 		}
+		/* record the desktop we leave, keeping the toggle working */
+		g_last_desktop_guid = cur_guid;
+		g_have_last = TRUE;
 	}
 
-	HWND taskbar = taskbar_grab_foreground();
-	save_last_desktop(&d_guid);
-	g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
-	taskbar_release_foreground(taskbar);
+	switch_desktop(desktop);
 }
 
-static IVirtualDesktop *get_desktop_by_guid(GUID *guid) {
-	IObjectArray *desktops = NULL;
+/* --- move core --- */
 
-	if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops)) || !desktops) {
-		return NULL;
-	}
-
-	UINT count;
-	if (FAILED(desktops->lpVtbl->GetCount(desktops, &count))) {
-		desktops->lpVtbl->Release(desktops);
-		return NULL;
-	}
-
-	IVirtualDesktop *desktop = NULL;
-	for (UINT i = 0; i < count; i++) {
-		IVirtualDesktop *d = NULL;
-		GUID d_guid;
-		if (FAILED(desktops->lpVtbl->GetAt(desktops, i, &IID_IVirtualDesktop,
-			(void**)&d)) || !d) {
-			continue;
-		}
-		if (SUCCEEDED(d->lpVtbl->GetId(d, &d_guid)) && guid_equal(&d_guid, guid)) {
-			desktop = d;
-			break;
-		}
-		d->lpVtbl->Release(d);
-	}
-
-	desktops->lpVtbl->Release(desktops);
-	return desktop;
-}
-
-static void switch_to_last_desktop(void) {
-	if (FAILED(ensure_manager())) {
-		return;
-	}
-	if (!g_have_last) {
-		return;
-	}
-
-	IVirtualDesktop *last_desktop = get_desktop_by_guid(&g_last_desktop_guid);
-	if (!last_desktop) {
-		/* the stored desktop no longer exists; clear the stale state */
-		g_have_last = FALSE;
-		return;
-	}
-
-	/* switch_to records the desktop we leave, keeping the toggle working */
-	switch_to(last_desktop);
-	last_desktop->lpVtbl->Release(last_desktop);
-}
-
-static void switch_to_desktop(int index) {
-	if (FAILED(ensure_manager())) {
-		return;
-	}
-	IVirtualDesktop *desktop = get_desktop_at(index);
-	if (!desktop) {
-		return;
-	}
-	switch_to(desktop);
-	desktop->lpVtbl->Release(desktop);
-}
-
-static void move_window_to_desktop(int index) {
+/* move the foreground window to the given desktop, switching after (optional) */
+static void move_window_to(IVirtualDesktop *desktop) {
 	HWND hwnd = GetForegroundWindow();
 
 	if (!hwnd) {
@@ -463,12 +434,6 @@ static void move_window_to_desktop(int index) {
 		return;
 	}
 
-	IVirtualDesktop *desktop = get_desktop_at(index);
-	if (!desktop) {
-		view->lpVtbl->Release(view);
-		return;
-	}
-
 	/* MoveViewToDesktop(this, view, desktop) */
 	g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view, desktop);
 	if (SWITCH_AFTER_ACTION) {
@@ -477,6 +442,28 @@ static void move_window_to_desktop(int index) {
 
 	desktop->lpVtbl->Release(desktop);
 	view->lpVtbl->Release(view);
+}
+
+/* --- actions (dispatched from wvdm_main) --- */
+
+static void switch_to_desktop(int index) {
+	if (FAILED(ensure_manager())) {
+		return;
+	}
+	IVirtualDesktop *desktop = get_desktop_at(index);
+	if (!desktop) {
+		return;
+	}
+	switch_to(desktop);
+	desktop->lpVtbl->Release(desktop);
+}
+
+static void move_window_to_desktop(int index) {
+	IVirtualDesktop *desktop = get_desktop_at(index);
+	if (!desktop) {
+		return;
+	}
+	move_window_to(desktop);
 }
 
 static void switch_to_adjacent_desktop(UINT direction) {
@@ -492,36 +479,11 @@ static void switch_to_adjacent_desktop(UINT direction) {
 }
 
 static void move_window_to_adjacent_desktop(UINT direction) {
-	HWND hwnd = GetForegroundWindow();
-
-	if (!hwnd) {
-		return;
-	}
-
-	if (FAILED(ensure_view_collection())) {
-		return;
-	}
-
-	IApplicationView *view = NULL;
-	if (FAILED(g_view_collection->lpVtbl->GetViewForHwnd(g_view_collection,
-		hwnd, &view)) || !view) {
-		return;
-	}
-
 	IVirtualDesktop *adjacent_desktop = get_adjacent_desktop(direction);
 	if (!adjacent_desktop) {
-		view->lpVtbl->Release(view);
 		return;
 	}
-
-	/* MoveViewToDesktop(this, view, desktop) */
-	g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view, adjacent_desktop);
-	if (SWITCH_AFTER_ACTION) {
-		switch_to(adjacent_desktop);
-	}
-
-	adjacent_desktop->lpVtbl->Release(adjacent_desktop);
-	view->lpVtbl->Release(view);
+	move_window_to(adjacent_desktop);
 }
 
 static void create_virtual_desktop(void) {
@@ -560,12 +522,24 @@ static void remove_virtual_desktop(void) {
 		return;
 	}
 
-	IVirtualDesktop *fallback_desktop = get_adjacent_desktop(1);
+	IVirtualDesktop *fallback_desktop = get_adjacent_desktop(ADJ_NEXT);
 	if (!fallback_desktop) {
-		fallback_desktop = get_adjacent_desktop(0);
+		fallback_desktop = get_adjacent_desktop(ADJ_PREV);
 	}
 	if (!fallback_desktop) {
 		current_desktop->lpVtbl->Release(current_desktop);
+		return;
+	}
+
+	/* with WRAP_ADJACENT and a single desktop the fallback is that same
+	 * desktop; Windows will not remove the last one, so bail out */
+	GUID current_guid;
+	GUID fallback_guid;
+	if (get_desktop_guid(current_desktop, &current_guid)
+		&& get_desktop_guid(fallback_desktop, &fallback_guid)
+		&& guid_equal(&fallback_guid, &current_guid)) {
+		current_desktop->lpVtbl->Release(current_desktop);
+		fallback_desktop->lpVtbl->Release(fallback_desktop);
 		return;
 	}
 
@@ -576,6 +550,28 @@ static void remove_virtual_desktop(void) {
 	current_desktop->lpVtbl->Release(current_desktop);
 	fallback_desktop->lpVtbl->Release(fallback_desktop);
 }
+
+static void switch_to_last_desktop(void) {
+	if (FAILED(ensure_manager())) {
+		return;
+	}
+	if (!g_have_last) {
+		return;
+	}
+
+	IVirtualDesktop *last_desktop = get_desktop_by_guid(&g_last_desktop_guid);
+	if (!last_desktop) {
+		/* the stored desktop no longer exists; clear the stale state */
+		g_have_last = FALSE;
+		return;
+	}
+
+	/* switch_to records the desktop we leave, keeping the toggle working */
+	switch_to(last_desktop);
+	last_desktop->lpVtbl->Release(last_desktop);
+}
+
+/* --- command line and message loop --- */
 
 static void print_help(void) {
 	static const WCHAR *help =
@@ -636,6 +632,7 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	MSG msg = {0};
 	HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 	if (FAILED(hr)) {
+		CloseHandle(g_single_mutex);
 		return 1;
 	}
 
@@ -658,7 +655,7 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 			MB_OK | MB_ICONWARNING);
 	}
 
-	while (GetMessage(&msg, NULL, 0, 0)) {
+	while (GetMessage(&msg, NULL, 0, 0) > 0) {
 		if (msg.message == WM_HOTKEY) {
 			UINT id = (UINT)msg.wParam;
 			if (id == HOTKEY_ID_EXIT) {
@@ -669,13 +666,13 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 			} else if (id >= HOTKEY_ID_MOVE && id < HOTKEY_ID_MOVE + MAX_DESKTOPS) {
 				move_window_to_desktop((int)(id - HOTKEY_ID_MOVE));
 			} else if (id == HOTKEY_ID_PREV) {
-				switch_to_adjacent_desktop(0);
+				switch_to_adjacent_desktop(ADJ_PREV);
 			} else if (id == HOTKEY_ID_NEXT) {
-				switch_to_adjacent_desktop(1);
+				switch_to_adjacent_desktop(ADJ_NEXT);
 			} else if (id == HOTKEY_ID_MOVE_PREV) {
-				move_window_to_adjacent_desktop(0);
+				move_window_to_adjacent_desktop(ADJ_PREV);
 			} else if (id == HOTKEY_ID_MOVE_NEXT) {
-				move_window_to_adjacent_desktop(1);
+				move_window_to_adjacent_desktop(ADJ_NEXT);
 			} else if (id == HOTKEY_ID_NEW) {
 				create_virtual_desktop();
 			} else if (id == HOTKEY_ID_REMOVE) {

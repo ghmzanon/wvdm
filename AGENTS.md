@@ -34,6 +34,10 @@ Keep edits to `wvdm.c` / `config.h` only; rebuild with `make` after changes.
 
 - **Braces**: always use braces for `if`/`for`/`while` bodies, even single-statement
   ones. Never `if (cond) return;` — expand to `if (cond) { return; }`.
+- **Early returns**: prefer guard clauses that `return` as soon as a precondition
+  fails over nested `if` bodies. Keep bodies at one level of nesting where possible;
+  extract the nested check into a small helper (e.g. `get_current_desktop_guid`)
+  instead of stacking `if`s.
 - **Line limit**: 80 columns. Wrap long calls/signatures by breaking before the
   final argument and indenting the continuation line with tabs to align with the
   opening `(` (e.g. `WinMain`, `CoCreateInstance`, long vtable entries).
@@ -53,6 +57,11 @@ Keep edits to `wvdm.c` / `config.h` only; rebuild with `make` after changes.
   later. Exception: out-parameters a call writes through a pointer must be declared
   immediately before that call; keep their defensive `= NULL` when the result is
   checked with `!var`.
+- **Function order**: define helpers bottom-up, grouped by concern: GUID helpers,
+  COM bootstrap, desktop lookup, switch core, move core, actions (in `wvdm_main`
+  dispatch order), then command line / message loop. Each function is defined
+  above its first caller, so there are no forward declarations. Use section banner
+  comments (`/* --- GUID helpers --- */`) between groups.
 - **Column alignment**: align columns in declaration blocks (e.g. `static` globals:
   types padded so `*` and variable names line up) and in aligned text blocks
   (e.g. `print_help` strings: shortcut + padding so descriptions start at the
