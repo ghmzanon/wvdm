@@ -1,7 +1,7 @@
 # wvdm — suckless Windows Virtual Desktop Manager
 
 wvdm 1.0 — single-file C program that switches
-between Windows 10/11 virtual desktops, moves windows, creates/removes
+between Windows 11 virtual desktops, moves windows, creates/removes
 desktops, and toggles last desktop — all via global hotkeys. Links only
 `kernel32`, `user32`, `ole32`. Zero dependencies, no CRT, no runtime config,
 no manifest, no external DLLs.
@@ -58,6 +58,7 @@ All behavior toggles and key bindings live in `config.h`:
 |---|---|---|
 | `SWITCH_AFTER_ACTION` | `1` | Set to `0` to stay on current desktop after move/create (removal always switches) |
 | `WRAP_ADJACENT` | `0` | Set to `1` to wrap around on adjacent navigation at edges |
+| `MAX_DESKTOPS` | `9` | Numbered-desktop hotkeys; desktop creation stops at this cap |
 | `MOD_*` / `KEY_*` | | Key combination for each action |
 
 Edit, rebuild, done.

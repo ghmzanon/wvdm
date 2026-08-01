@@ -6,6 +6,9 @@
 /* set to 1 to wrap around on adjacent navigation */
 #define WRAP_ADJACENT   0
 
+/* numbered-desktop hotkeys (Alt+1..9); desktop creation stops at this cap */
+#define MAX_DESKTOPS    9
+
 #define MOD_SWITCH      MOD_ALT
 #define KEY_SWITCH(n)   ('1' + (n))
 

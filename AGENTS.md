@@ -1,7 +1,7 @@
 # wvdm — suckless Windows Virtual Desktop Manager
 
 Single-file C program that switches between Windows
-10/11 virtual desktops via global hotkeys. User-facing docs (hotkeys, build,
+11 virtual desktops via global hotkeys. User-facing docs (hotkeys, build,
 configuration, license) live in `README.md`.
 
 ## How it works
@@ -47,6 +47,12 @@ Keep edits to `wvdm.c` / `config.h` only; rebuild with `make` after changes.
   slots, and inline actual-COM-signature annotations (e.g.
   `/* RemoveDesktop(this, fallbackDesktop, desktopToRemove) */`). Never comment
   on code that is self-evident.
+- **Variables**: declare each variable as close to its first use as possible, in
+  the innermost scope that needs it — never group declarations at the top of a
+  function. Initialize at declaration; never a bare `HRESULT hr;` that is assigned
+  later. Exception: out-parameters a call writes through a pointer must be declared
+  immediately before that call; keep their defensive `= NULL` when the result is
+  checked with `!var`.
 - **Column alignment**: align columns in declaration blocks (e.g. `static` globals:
   types padded so `*` and variable names line up) and in aligned text blocks
   (e.g. `print_help` strings: shortcut + padding so descriptions start at the
