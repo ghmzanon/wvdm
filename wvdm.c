@@ -144,6 +144,7 @@ static GUID                            g_last_desktop_guid = {0};
 static BOOL                            g_have_last = FALSE;
 static int                             g_hotkey_failures = 0;
 static HANDLE                          g_single_mutex = NULL;
+static const WCHAR                     kVersion[] = L"wvdm 1.0";
 
 /* avoid CRT memcmp pulled in by IsEqualGUID macro */
 static BOOL guid_equal(GUID *a, GUID *b) {
@@ -468,6 +469,7 @@ static void move_window_to_desktop(int index) {
 		return;
 	}
 
+	/* MoveViewToDesktop(this, view, desktop) */
 	g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view, desktop);
 	if (SWITCH_AFTER_ACTION) {
 		switch_to(desktop);
@@ -512,6 +514,7 @@ static void move_window_to_adjacent_desktop(UINT direction) {
 		return;
 	}
 
+	/* MoveViewToDesktop(this, view, desktop) */
 	g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view, adjacent_desktop);
 	if (SWITCH_AFTER_ACTION) {
 		switch_to(adjacent_desktop);
@@ -617,7 +620,7 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 			return 0;
 		}
 		if (lstrcmpiA(arg, "--version") == 0 || lstrcmpiA(arg, "-v") == 0) {
-			MessageBoxW(NULL, L"wvdm 1.0", L"wvdm", MB_OK);
+			MessageBoxW(NULL, kVersion, L"wvdm", MB_OK);
 			return 0;
 		}
 		print_help();
@@ -663,21 +666,21 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 			}
 			if (id >= HOTKEY_ID_BASE && id < HOTKEY_ID_BASE + MAX_DESKTOPS) {
 				switch_to_desktop((int)(id - HOTKEY_ID_BASE));
-			} else if ((id >= HOTKEY_ID_MOVE && id < HOTKEY_ID_MOVE + MAX_DESKTOPS)) {
+			} else if (id >= HOTKEY_ID_MOVE && id < HOTKEY_ID_MOVE + MAX_DESKTOPS) {
 				move_window_to_desktop((int)(id - HOTKEY_ID_MOVE));
-			} else if ((id == HOTKEY_ID_PREV)) {
+			} else if (id == HOTKEY_ID_PREV) {
 				switch_to_adjacent_desktop(0);
-			} else if ((id == HOTKEY_ID_NEXT)) {
+			} else if (id == HOTKEY_ID_NEXT) {
 				switch_to_adjacent_desktop(1);
-			} else if ((id == HOTKEY_ID_MOVE_PREV)) {
+			} else if (id == HOTKEY_ID_MOVE_PREV) {
 				move_window_to_adjacent_desktop(0);
-			} else if ((id == HOTKEY_ID_MOVE_NEXT)) {
+			} else if (id == HOTKEY_ID_MOVE_NEXT) {
 				move_window_to_adjacent_desktop(1);
-			} else if ((id == HOTKEY_ID_NEW)) {
+			} else if (id == HOTKEY_ID_NEW) {
 				create_virtual_desktop();
-			} else if ((id == HOTKEY_ID_REMOVE)) {
+			} else if (id == HOTKEY_ID_REMOVE) {
 				remove_virtual_desktop();
-			} else if ((id == HOTKEY_ID_LAST)) {
+			} else if (id == HOTKEY_ID_LAST) {
 				switch_to_last_desktop();
 			}
 		}

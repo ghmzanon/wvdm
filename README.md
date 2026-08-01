@@ -76,13 +76,6 @@ Windows runs anything in the Startup folder at logon. Just copy the exe there:
 1. `Win+R`, type `shell:startup`, press Enter
 2. Copy `wvdm.exe` (or a shortcut to it) into the folder
 
-No need for `shell:startup`: the folder has a plain path, so a terminal works:
-
-| Shell | Command |
-|---|---|
-| cmd | `copy wvdm.exe "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\"` |
-| PowerShell | `Copy-Item wvdm.exe "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\"` |
-
 To uninstall: delete the file from the folder.
 
 ## License

@@ -1,8 +1,7 @@
 TARGET = wvdm.exe
 CC     = x86_64-w64-mingw32-gcc
-RC    ?= x86_64-w64-mingw32-windres
 
-CFLAGS   = -Wall -Wextra -O2 -Os -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables -nostdlib
+CFLAGS   = -Wall -Wextra -Os -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables -nostdlib
 LDFLAGS  = -Wl,--gc-sections -Wl,-eWinMain -s -mwindows
 LIBS     = -lkernel32 -luser32 -lole32
 
@@ -12,6 +11,6 @@ $(TARGET): wvdm.c config.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 
 clean:
-	rm -f $(TARGET) $(TARGET:.exe=.o)
+	rm -f $(TARGET)
 
 .PHONY: all clean
