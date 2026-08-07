@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <objbase.h>
 #include <servprov.h>
+#include <objectarray.h>
 #include <dwmapi.h>
 #include "config.h"
 
@@ -31,19 +32,6 @@ static const GUID IID_IApplicationViewCollection =
 
 #define ADJ_PREV            0
 #define ADJ_NEXT            1
-
-typedef struct IObjectArrayVtbl IObjectArrayVtbl;
-typedef struct IObjectArray {
-	const IObjectArrayVtbl *lpVtbl;
-} IObjectArray;
-
-struct IObjectArrayVtbl {
-	HRESULT (STDMETHODCALLTYPE *QueryInterface)(IObjectArray*, REFIID, void**);
-	ULONG   (STDMETHODCALLTYPE *AddRef)(IObjectArray*);
-	ULONG   (STDMETHODCALLTYPE *Release)(IObjectArray*);
-	HRESULT (STDMETHODCALLTYPE *GetCount)(IObjectArray*, UINT*);
-	HRESULT (STDMETHODCALLTYPE *GetAt)(IObjectArray*, UINT, REFIID, void**);
-};
 
 typedef struct IVirtualDesktopVtbl IVirtualDesktopVtbl;
 typedef struct IVirtualDesktop {
