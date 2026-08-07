@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <objbase.h>
 #include <servprov.h>
+#include <dwmapi.h>
 #include "config.h"
 
 /* undocumented COM CLSID/IID for Windows Virtual Desktop */
@@ -146,7 +147,6 @@ static IApplicationViewCollection     *g_view_collection = NULL;
 static GUID                            g_last_desktop_guid = {0};
 static BOOL                            g_have_last = FALSE;
 static int                             g_hotkey_failures = 0;
-static HANDLE                          g_single_mutex = NULL;
 static const WCHAR                     kVersion[] = L"wvdm 1.0";
 
 /* --- GUID helpers --- */
@@ -227,6 +227,15 @@ static HRESULT ensure_view_collection(void) {
 
 /* --- desktop lookup --- */
 
+static IObjectArray *get_desktops(void) {
+	IObjectArray *desktops = NULL;
+	if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops))
+		|| !desktops) {
+		return NULL;
+	}
+	return desktops;
+}
+
 static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid) {
 	UINT count = 0;
 	HRESULT hr = desktops->lpVtbl->GetCount(desktops, &count);
@@ -254,9 +263,8 @@ static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid) {
 }
 
 static IVirtualDesktop *get_desktop_at(int index) {
-	IObjectArray *desktops = NULL;
-
-	if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops)) || !desktops) {
+	IObjectArray *desktops = get_desktops();
+	if (!desktops) {
 		return NULL;
 	}
 
@@ -268,13 +276,12 @@ static IVirtualDesktop *get_desktop_at(int index) {
 }
 
 static IVirtualDesktop *get_desktop_by_guid(GUID *guid) {
-	IObjectArray *desktops = NULL;
-
-	if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops)) || !desktops) {
+	IObjectArray *desktops = get_desktops();
+	if (!desktops) {
 		return NULL;
 	}
 
-	UINT count;
+	UINT count = 0;
 	if (FAILED(desktops->lpVtbl->GetCount(desktops, &count))) {
 		desktops->lpVtbl->Release(desktops);
 		return NULL;
@@ -305,8 +312,8 @@ static IVirtualDesktop *get_adjacent_desktop(UINT direction) {
 		return NULL;
 	}
 
-	IObjectArray *desktops = NULL;
-	if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops)) || !desktops) {
+	IObjectArray *desktops = get_desktops();
+	if (!desktops) {
 		return NULL;
 	}
 
@@ -344,50 +351,81 @@ static IVirtualDesktop *get_adjacent_desktop(UINT direction) {
 
 /* --- switch core --- */
 
-/* hand the foreground to the taskbar before switching, so no app window owns
- * it across the switch; returns the taskbar handle to release afterwards */
-static HWND taskbar_grab_foreground(void) {
-	HWND taskbar = FindWindowW(L"XamlExplorerHostIslandWindow", NULL);
-	if (!taskbar) {
-		taskbar = FindWindowW(L"Shell_TrayWnd", NULL);
-	}
-	if (!taskbar) {
-		return NULL;
-	}
+/* the window the shell leaves topmost and uncloaked on the new desktop is the
+ * one that should take the foreground; activating it directly is what stops
+ * the taskbar flash — the desktop-name label never displays for a programmatic
+ * switch, only Explorer's own input paths show it */
 
-	HWND foreground = GetForegroundWindow();
-	DWORD taskbar_thread = 0;
-	DWORD foreground_thread = 0;
-	if (foreground) {
-		GetWindowThreadProcessId(taskbar, &taskbar_thread);
-		GetWindowThreadProcessId(foreground, &foreground_thread);
-		if (!taskbar_thread || !foreground_thread
-			|| foreground_thread == GetCurrentThreadId()) {
-			return taskbar;
-		}
+/* shell chrome would match the activation filter; both taskbar classes can be
+ * top-level windows on Windows 11, and the desktop hosts are always present */
+static BOOL is_shell_chrome(HWND hwnd) {
+	WCHAR class_name[64];
+	if (GetClassNameW(hwnd, class_name, 64) == 0) {
+		return FALSE;
 	}
-
-	AttachThreadInput(taskbar_thread, GetCurrentThreadId(), TRUE);
-	AttachThreadInput(foreground_thread, GetCurrentThreadId(), TRUE);
-	SetForegroundWindow(taskbar);
-	AttachThreadInput(foreground_thread, GetCurrentThreadId(), FALSE);
-	AttachThreadInput(taskbar_thread, GetCurrentThreadId(), FALSE);
-	return taskbar;
+	return lstrcmpW(class_name, L"Shell_TrayWnd") == 0
+		|| lstrcmpW(class_name, L"XamlExplorerHostIslandWindow") == 0
+		|| lstrcmpW(class_name, L"Progman") == 0
+		|| lstrcmpW(class_name, L"WorkerW") == 0;
 }
 
-/* the taskbar gives up focus after the switch, letting the target desktop's
- * active window take it over cleanly (no taskbar flash) */
-static void taskbar_release_foreground(HWND taskbar) {
-	if (taskbar) {
-		ShowWindow(taskbar, SW_MINIMIZE);
+static BOOL CALLBACK activation_enum_cb(HWND hwnd, LPARAM lparam) {
+	HWND *target = (HWND*)lparam;
+	if (is_shell_chrome(hwnd)) {
+		return TRUE;
 	}
+	/* alt-tab rules: visible, unowned, not a tool window; cloaked windows are
+	 * minimized or on another desktop */
+	if (!IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER)) {
+		return TRUE;
+	}
+	if (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) {
+		return TRUE;
+	}
+	DWORD cloaked = 0;
+	if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked,
+		sizeof(cloaked))) || cloaked != 0) {
+		return TRUE;
+	}
+	*target = hwnd;
+	return FALSE;
 }
 
-/* hand the foreground to the taskbar, switch, and hand it back */
+/* the first window in Z-order to pass the filter is the shell's candidate for
+ * the new desktop's active window */
+static HWND find_activation_target(void) {
+	HWND target = NULL;
+	EnumWindows(activation_enum_cb, (LPARAM)&target);
+	return target;
+}
+
+/* SetForegroundWindow from a background process is blocked by the foreground
+ * lock; attaching our input queue to the target's thread first is the
+ * documented way to bypass it */
+static void foreground_activate(HWND target) {
+	DWORD target_thread = 0;
+	GetWindowThreadProcessId(target, &target_thread);
+	if (!target_thread) {
+		return;
+	}
+	AttachThreadInput(target_thread, GetCurrentThreadId(), TRUE);
+	SetForegroundWindow(target);
+	AttachThreadInput(target_thread, GetCurrentThreadId(), FALSE);
+}
+
+/* switch and activate the new desktop's active window; activating the window
+ * explicitly is what prevents the taskbar flash */
 static void switch_desktop(IVirtualDesktop *desktop) {
-	HWND taskbar = taskbar_grab_foreground();
 	g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
-	taskbar_release_foreground(taskbar);
+	HWND target = find_activation_target();
+	if (!target) {
+		/* empty desktop: hand focus to the shell desktop as the natural
+		 * nothing-focused state */
+		target = GetShellWindow();
+	}
+	if (target) {
+		foreground_activate(target);
+	}
 }
 
 /* switch to the given desktop, remembering the one we leave */
@@ -400,7 +438,7 @@ static void switch_to(IVirtualDesktop *desktop) {
 	}
 
 	/* a hotkey for the desktop we are already on is a no-op: no switch, no
-	 * taskbar churn, and no last-desktop bookkeeping */
+	 * focus churn, and no last-desktop bookkeeping */
 	GUID cur_guid;
 	if (get_current_desktop_guid(&cur_guid)) {
 		if (guid_equal(&d_guid, &cur_guid)) {
@@ -624,7 +662,7 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	}
 
 	/* one instance per logon session; a second launch exits silently */
-	g_single_mutex = CreateMutex(NULL, FALSE, "Local\\wvdm");
+	HANDLE single_mutex = CreateMutex(NULL, FALSE, "Local\\wvdm");
 	if (GetLastError() == ERROR_ALREADY_EXISTS) {
 		return 0;
 	}
@@ -632,7 +670,7 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	MSG msg = {0};
 	HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 	if (FAILED(hr)) {
-		CloseHandle(g_single_mutex);
+		CloseHandle(single_mutex);
 		return 1;
 	}
 
