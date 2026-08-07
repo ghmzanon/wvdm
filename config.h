@@ -6,13 +6,13 @@
 /* set to 1 to wrap around on adjacent navigation */
 #define WRAP_ADJACENT   0
 
-/* numbered-desktop hotkeys (Alt+1..9); desktop creation stops at this cap */
+/* numbered-desktop hotkeys (Ctrl+Alt+1..9); desktop creation stops at this cap */
 #define MAX_DESKTOPS    9
 
-#define MOD_SWITCH      MOD_ALT | MOD_NOREPEAT
+#define MOD_SWITCH      MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
 #define KEY_SWITCH(n)   ('1' + (n))
 
-#define MOD_MOVE        MOD_ALT | MOD_SHIFT | MOD_NOREPEAT
+#define MOD_MOVE        MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT
 #define KEY_MOVE(n)     ('1' + (n))
 
 #define MOD_PREV        MOD_CONTROL | MOD_ALT | MOD_NOREPEAT

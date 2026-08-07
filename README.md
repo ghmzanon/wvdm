@@ -8,7 +8,7 @@ no manifest, no external DLLs.
 
 ## Features
 
-- Switch to any desktop with `Alt+1..9`
+- Switch to any desktop with `Ctrl+Alt+1..9`
 - Move the active window and switch in one step
 - Adjacent desktop navigation with wrap-around option
 - Toggle back to the last visited desktop
@@ -19,8 +19,8 @@ no manifest, no external DLLs.
 
 | Shortcut | Action |
 |---|---|
-| `Alt+1..9` | Switch to desktop N |
-| `Alt+Shift+1..9` | Move window + switch to desktop N |
+| `Ctrl+Alt+1..9` | Switch to desktop N |
+| `Ctrl+Alt+Shift+1..9` | Move window + switch to desktop N |
 | `Ctrl+Alt+Left/Right` | Previous/next desktop |
 | `Ctrl+Alt+Shift+Left/Right` | Move window + switch to adjacent |
 | `Ctrl+Alt+Space` | Toggle last desktop |
