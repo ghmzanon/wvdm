@@ -3,8 +3,8 @@
 wvdm 1.0 — single-file C program that switches
 between Windows 11 virtual desktops, moves windows, creates/removes
 desktops, and toggles last desktop — all via global hotkeys. Links only
-`kernel32`, `user32`, `ole32`. Zero dependencies, no CRT, no runtime config,
-no manifest, no external DLLs.
+`kernel32`, `user32`, `ole32`, `dwmapi`. Zero dependencies, no CRT, no runtime
+config, no manifest, no external DLLs.
 
 ## Features
 

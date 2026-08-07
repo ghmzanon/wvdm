@@ -224,12 +224,15 @@ static IObjectArray *get_desktops(void) {
 	return desktops;
 }
 
-static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid) {
+/* index of the desktop whose GUID matches, or -1; also reports the desktop
+ * count so callers avoid a second GetCount round-trip */
+static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid,
+	UINT *out_count) {
 	UINT count = 0;
-	HRESULT hr = desktops->lpVtbl->GetCount(desktops, &count);
-	if (FAILED(hr)) {
+	if (FAILED(desktops->lpVtbl->GetCount(desktops, &count))) {
 		return -1;
 	}
+	*out_count = count;
 
 	for (UINT i = 0; i < count; i++) {
 		IVirtualDesktop *desktop = NULL;
@@ -305,14 +308,9 @@ static IVirtualDesktop *get_adjacent_desktop(UINT direction) {
 		return NULL;
 	}
 
-	int idx = get_current_desktop_index(desktops, &cur_guid);
+	UINT count = 0;
+	int idx = get_current_desktop_index(desktops, &cur_guid, &count);
 	if (idx < 0) {
-		desktops->lpVtbl->Release(desktops);
-		return NULL;
-	}
-
-	UINT count;
-	if (FAILED(desktops->lpVtbl->GetCount(desktops, &count))) {
 		desktops->lpVtbl->Release(desktops);
 		return NULL;
 	}
@@ -442,27 +440,31 @@ static void switch_to(IVirtualDesktop *desktop) {
 
 /* --- move core --- */
 
-/* move the foreground window to the given desktop, switching after (optional) */
+/* move the foreground window to the given desktop, switching after (optional);
+ * takes ownership of the desktop reference and releases it on every path */
 static void move_window_to(IVirtualDesktop *desktop) {
 	HWND hwnd = GetForegroundWindow();
-
 	if (!hwnd) {
+		desktop->lpVtbl->Release(desktop);
 		return;
 	}
 
 	if (FAILED(ensure_view_collection())) {
+		desktop->lpVtbl->Release(desktop);
 		return;
 	}
 
 	IApplicationView *view = NULL;
 	if (FAILED(g_view_collection->lpVtbl->GetViewForHwnd(g_view_collection,
 		hwnd, &view)) || !view) {
+		desktop->lpVtbl->Release(desktop);
 		return;
 	}
 
-	/* MoveViewToDesktop(this, view, desktop) */
-	g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view, desktop);
-	if (SWITCH_AFTER_ACTION) {
+	/* MoveViewToDesktop(this, view, desktop); only switch after a successful
+	 * move, so a failure does not strand the window on the old desktop */
+	if (SUCCEEDED(g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view,
+		desktop)) && SWITCH_AFTER_ACTION) {
 		switch_to(desktop);
 	}
 
@@ -525,8 +527,8 @@ static void create_virtual_desktop(void) {
 	}
 
 	IVirtualDesktop *desktop = NULL;
-	HRESULT hr = g_manager->lpVtbl->CreateDesktop(g_manager, &desktop);
-	if (FAILED(hr) || !desktop) {
+	if (FAILED(g_manager->lpVtbl->CreateDesktop(g_manager, &desktop))
+		|| !desktop) {
 		return;
 	}
 
@@ -571,7 +573,12 @@ static void remove_virtual_desktop(void) {
 
 	switch_to(fallback_desktop);
 	/* RemoveDesktop(this, fallbackDesktop, desktopToRemove) */
-	g_manager->lpVtbl->RemoveDesktop(g_manager, fallback_desktop, current_desktop);
+	if (FAILED(g_manager->lpVtbl->RemoveDesktop(g_manager, fallback_desktop,
+		current_desktop))) {
+		/* removal failed (e.g. a window is still pinned); go back to the
+		 * desktop we were on instead of leaving the user on the fallback */
+		switch_to(current_desktop);
+	}
 
 	current_desktop->lpVtbl->Release(current_desktop);
 	fallback_desktop->lpVtbl->Release(fallback_desktop);
@@ -609,8 +616,8 @@ static void print_help(void) {
 		L"Hotkeys:\n"
 		L"  Ctrl+Alt+1..9               switch to desktop N\n"
 		L"  Ctrl+Alt+Shift+1..9         move window to desktop N\n"
-		L"  Ctrl+Alt+Left/Right        previous/next desktop\n"
-		L"  Ctrl+Alt+Shift+Left/Right  move window to adjacent\n"
+		L"  Ctrl+Alt+Left/Right          previous/next desktop\n"
+		L"  Ctrl+Alt+Shift+Left/Right    move window to adjacent\n"
 		L"  Ctrl+Alt+Space             toggle last desktop\n"
 		L"  Ctrl+Alt+N                 create new desktop\n"
 		L"  Ctrl+Alt+W                 close current desktop\n"
@@ -655,9 +662,7 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		return 0;
 	}
 
-	MSG msg = {0};
-	HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-	if (FAILED(hr)) {
+	if (FAILED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED))) {
 		CloseHandle(single_mutex);
 		return 1;
 	}
@@ -681,7 +686,10 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 			MB_OK | MB_ICONWARNING);
 	}
 
-	while (GetMessage(&msg, NULL, 0, 0) > 0) {
+	/* GetMessage returns 0 on WM_QUIT and -1 on error; loop on positive */
+	int msg_ret = 0;
+	MSG msg = {0};
+	while ((msg_ret = GetMessage(&msg, NULL, 0, 0)) > 0) {
 		if (msg.message == WM_HOTKEY) {
 			UINT id = (UINT)msg.wParam;
 			if (id == HOTKEY_ID_EXIT) {
@@ -714,8 +722,8 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	}
 
 	/* the EXIT hotkey terminates the process in the message loop above;
-	 * this return only covers a GetMessage error or an unexpected WM_QUIT */
-	return 0;
+	 * this return only covers a GetMessage error (-1) or WM_QUIT (0) */
+	return msg_ret < 0;
 }
 
 /* no CRT: returning from the entry point never terminates the process, and
