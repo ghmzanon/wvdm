@@ -76,7 +76,7 @@ typedef struct IVirtualDesktopManagerInternal {
  * slot 10: IsViewOnDesktop (unused)
  * slot 11: CreateDesktop
  * slot 12: varies by build (unused)
- * slot 13: RemoveDesktop(manager, fallback, toRemove) */
+ * slot 13: RemoveDesktop(manager, toRemove, fallback) */
 struct IVirtualDesktopManagerInternalVtbl {
 	HRESULT (STDMETHODCALLTYPE *QueryInterface)(IVirtualDesktopManagerInternal*,
 		REFIID, void**);
@@ -137,6 +137,22 @@ static BOOL                            g_have_last = FALSE;
 static int                             g_hotkey_failures = 0;
 static const WCHAR                     kVersion[] = L"wvdm 1.0";
 
+/* release shell proxies after a failed call so the next action can reconnect */
+static void reset_shell_interfaces(void) {
+	if (g_view_collection) {
+		g_view_collection->lpVtbl->Release(g_view_collection);
+		g_view_collection = NULL;
+	}
+	if (g_manager) {
+		g_manager->lpVtbl->Release(g_manager);
+		g_manager = NULL;
+	}
+	if (g_provider) {
+		g_provider->lpVtbl->Release(g_provider);
+		g_provider = NULL;
+	}
+}
+
 /* --- GUID helpers --- */
 
 /* avoid CRT memcmp pulled in by IsEqualGUID macro */
@@ -158,10 +174,14 @@ static BOOL get_current_desktop_guid(GUID *guid) {
 	IVirtualDesktop *current_desktop = NULL;
 	if (FAILED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
 		&current_desktop)) || !current_desktop) {
+		reset_shell_interfaces();
 		return FALSE;
 	}
 	BOOL ok = get_desktop_guid(current_desktop, guid);
 	current_desktop->lpVtbl->Release(current_desktop);
+	if (!ok) {
+		reset_shell_interfaces();
+	}
 	return ok;
 }
 
@@ -189,9 +209,7 @@ static HRESULT ensure_manager(void) {
 		&IID_IVirtualDesktopManagerInternal,
 		(void**)&g_manager);
 	if (FAILED(hr)) {
-		/* drop the provider so a later retry can recreate it */
-		g_provider->lpVtbl->Release(g_provider);
-		g_provider = NULL;
+		reset_shell_interfaces();
 	}
 	return hr;
 }
@@ -207,10 +225,14 @@ static HRESULT ensure_view_collection(void) {
 		return E_FAIL;
 	}
 
-	return g_provider->lpVtbl->QueryService(g_provider,
+	HRESULT hr = g_provider->lpVtbl->QueryService(g_provider,
 		&IID_IApplicationViewCollection,
 		&IID_IApplicationViewCollection,
 		(void**)&g_view_collection);
+	if (FAILED(hr)) {
+		reset_shell_interfaces();
+	}
+	return hr;
 }
 
 /* --- desktop lookup --- */
@@ -219,6 +241,7 @@ static IObjectArray *get_desktops(void) {
 	IObjectArray *desktops = NULL;
 	if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops))
 		|| !desktops) {
+		reset_shell_interfaces();
 		return NULL;
 	}
 	return desktops;
@@ -230,6 +253,7 @@ static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid,
 	UINT *out_count) {
 	UINT count = 0;
 	if (FAILED(desktops->lpVtbl->GetCount(desktops, &count))) {
+		reset_shell_interfaces();
 		return -1;
 	}
 	*out_count = count;
@@ -275,6 +299,7 @@ static IVirtualDesktop *get_desktop_by_guid(GUID *guid) {
 	UINT count = 0;
 	if (FAILED(desktops->lpVtbl->GetCount(desktops, &count))) {
 		desktops->lpVtbl->Release(desktops);
+		reset_shell_interfaces();
 		return NULL;
 	}
 
@@ -338,12 +363,8 @@ static IVirtualDesktop *get_adjacent_desktop(UINT direction) {
 /* --- switch core --- */
 
 /* the window the shell leaves topmost and uncloaked on the new desktop is the
- * one that should take the foreground; activating it directly is what stops
- * the taskbar flash — the desktop-name label never displays for a programmatic
- * switch, only Explorer's own input paths show it */
-
-/* shell chrome would match the activation filter; both taskbar classes can be
- * top-level windows on Windows 11, and the desktop hosts are always present */
+ * one that should take the foreground; activating it directly stops the
+ * taskbar flash */
 static BOOL is_shell_chrome(HWND hwnd) {
 	WCHAR class_name[64];
 	if (GetClassNameW(hwnd, class_name, 64) == 0) {
@@ -377,8 +398,6 @@ static BOOL CALLBACK activation_enum_cb(HWND hwnd, LPARAM lparam) {
 	return FALSE;
 }
 
-/* the first window in Z-order to pass the filter is the shell's candidate for
- * the new desktop's active window */
 static HWND find_activation_target(void) {
 	HWND target = NULL;
 	EnumWindows(activation_enum_cb, (LPARAM)&target);
@@ -386,8 +405,7 @@ static HWND find_activation_target(void) {
 }
 
 /* SetForegroundWindow from a background process is blocked by the foreground
- * lock; attaching our input queue to the target's thread first is the
- * documented way to bypass it */
+ * lock; attaching our input queue to the target's thread first bypasses it */
 static void foreground_activate(HWND target) {
 	DWORD target_thread = 0;
 	GetWindowThreadProcessId(target, &target_thread);
@@ -399,43 +417,46 @@ static void foreground_activate(HWND target) {
 	AttachThreadInput(target_thread, GetCurrentThreadId(), FALSE);
 }
 
-/* switch and activate the new desktop's active window; activating the window
- * explicitly is what prevents the taskbar flash */
-static void switch_desktop(IVirtualDesktop *desktop) {
-	g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
+/* switch and activate the new desktop's shell-selected window */
+static BOOL switch_desktop(IVirtualDesktop *desktop) {
+	if (FAILED(g_manager->lpVtbl->SwitchDesktop(g_manager, desktop))) {
+		reset_shell_interfaces();
+		return FALSE;
+	}
 	HWND target = find_activation_target();
 	if (!target) {
-		/* empty desktop: hand focus to the shell desktop as the natural
-		 * nothing-focused state */
 		target = GetShellWindow();
 	}
 	if (target) {
 		foreground_activate(target);
 	}
+	return TRUE;
 }
 
 /* switch to the given desktop, remembering the one we leave */
-static void switch_to(IVirtualDesktop *desktop) {
+static BOOL switch_to(IVirtualDesktop *desktop) {
 	GUID d_guid;
 	if (!get_desktop_guid(desktop, &d_guid)) {
 		/* cannot identify the target; switch without bookkeeping */
-		switch_desktop(desktop);
-		return;
+		return switch_desktop(desktop);
 	}
 
 	/* a hotkey for the desktop we are already on is a no-op: no switch, no
 	 * focus churn, and no last-desktop bookkeeping */
 	GUID cur_guid;
-	if (get_current_desktop_guid(&cur_guid)) {
-		if (guid_equal(&d_guid, &cur_guid)) {
-			return;
-		}
-		/* record the desktop we leave, keeping the toggle working */
-		g_last_desktop_guid = cur_guid;
-		g_have_last = TRUE;
+	if (!get_current_desktop_guid(&cur_guid)) {
+		return FALSE;
 	}
-
-	switch_desktop(desktop);
+	if (guid_equal(&d_guid, &cur_guid)) {
+		return TRUE;
+	}
+	if (!switch_desktop(desktop)) {
+		return FALSE;
+	}
+	/* record the desktop we leave only after the switch succeeds */
+	g_last_desktop_guid = cur_guid;
+	g_have_last = TRUE;
+	return TRUE;
 }
 
 /* --- move core --- */
@@ -457,14 +478,18 @@ static void move_window_to(IVirtualDesktop *desktop) {
 	IApplicationView *view = NULL;
 	if (FAILED(g_view_collection->lpVtbl->GetViewForHwnd(g_view_collection,
 		hwnd, &view)) || !view) {
+		reset_shell_interfaces();
 		desktop->lpVtbl->Release(desktop);
 		return;
 	}
 
 	/* MoveViewToDesktop(this, view, desktop); only switch after a successful
 	 * move, so a failure does not strand the window on the old desktop */
-	if (SUCCEEDED(g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view,
-		desktop)) && SWITCH_AFTER_ACTION) {
+	HRESULT hr = g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view,
+		desktop);
+	if (FAILED(hr)) {
+		reset_shell_interfaces();
+	} else if (SWITCH_AFTER_ACTION) {
 		switch_to(desktop);
 	}
 
@@ -487,6 +512,9 @@ static void switch_to_desktop(int index) {
 }
 
 static void move_window_to_desktop(int index) {
+	if (FAILED(ensure_manager())) {
+		return;
+	}
 	IVirtualDesktop *desktop = get_desktop_at(index);
 	if (!desktop) {
 		return;
@@ -507,6 +535,9 @@ static void switch_to_adjacent_desktop(UINT direction) {
 }
 
 static void move_window_to_adjacent_desktop(UINT direction) {
+	if (FAILED(ensure_manager())) {
+		return;
+	}
 	IVirtualDesktop *adjacent_desktop = get_adjacent_desktop(direction);
 	if (!adjacent_desktop) {
 		return;
@@ -521,14 +552,18 @@ static void create_virtual_desktop(void) {
 
 	/* no numbered hotkey above MAX_DESKTOPS; no room for an extra desktop */
 	UINT count = 0;
-	if (FAILED(g_manager->lpVtbl->GetCount(g_manager, &count))
-		|| count >= MAX_DESKTOPS) {
+	if (FAILED(g_manager->lpVtbl->GetCount(g_manager, &count))) {
+		reset_shell_interfaces();
+		return;
+	}
+	if (count >= MAX_DESKTOPS) {
 		return;
 	}
 
 	IVirtualDesktop *desktop = NULL;
 	if (FAILED(g_manager->lpVtbl->CreateDesktop(g_manager, &desktop))
 		|| !desktop) {
+		reset_shell_interfaces();
 		return;
 	}
 
@@ -547,6 +582,7 @@ static void remove_virtual_desktop(void) {
 	IVirtualDesktop *current_desktop = NULL;
 	if (FAILED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
 		&current_desktop)) || !current_desktop) {
+		reset_shell_interfaces();
 		return;
 	}
 
@@ -571,10 +607,14 @@ static void remove_virtual_desktop(void) {
 		return;
 	}
 
-	switch_to(fallback_desktop);
-	/* RemoveDesktop(this, fallbackDesktop, desktopToRemove) */
-	if (FAILED(g_manager->lpVtbl->RemoveDesktop(g_manager, fallback_desktop,
-		current_desktop))) {
+	if (!switch_to(fallback_desktop)) {
+		current_desktop->lpVtbl->Release(current_desktop);
+		fallback_desktop->lpVtbl->Release(fallback_desktop);
+		return;
+	}
+	/* RemoveDesktop(this, desktopToRemove, fallbackDesktop) */
+	if (FAILED(g_manager->lpVtbl->RemoveDesktop(g_manager, current_desktop,
+		fallback_desktop))) {
 		/* removal failed (e.g. a window is still pinned); go back to the
 		 * desktop we were on instead of leaving the user on the fallback */
 		switch_to(current_desktop);
@@ -614,14 +654,7 @@ static void print_help(void) {
 		L"  --version, -v     show version\n"
 		L"\n"
 		L"Hotkeys:\n"
-		L"  Ctrl+Alt+1..9               switch to desktop N\n"
-		L"  Ctrl+Alt+Shift+1..9         move window to desktop N\n"
-		L"  Ctrl+Alt+Left/Right          previous/next desktop\n"
-		L"  Ctrl+Alt+Shift+Left/Right    move window to adjacent\n"
-		L"  Ctrl+Alt+Space             toggle last desktop\n"
-		L"  Ctrl+Alt+N                 create new desktop\n"
-		L"  Ctrl+Alt+W                 close current desktop\n"
-		L"  Ctrl+Alt+Q                 quit\n";
+		L"  Configured at build time in config.h\n";
 	MessageBoxW(NULL, help, L"wvdm", MB_OK);
 }
 
@@ -658,7 +691,12 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
 	/* one instance per logon session; a second launch exits silently */
 	HANDLE single_mutex = CreateMutex(NULL, FALSE, "Local\\wvdm");
-	if (GetLastError() == ERROR_ALREADY_EXISTS) {
+	DWORD mutex_error = GetLastError();
+	if (!single_mutex) {
+		return 1;
+	}
+	if (mutex_error == ERROR_ALREADY_EXISTS) {
+		CloseHandle(single_mutex);
 		return 0;
 	}
 

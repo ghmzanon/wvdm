@@ -9,6 +9,10 @@
 /* numbered-desktop hotkeys (Ctrl+Alt+1..9); desktop creation stops at this cap */
 #define MAX_DESKTOPS    9
 
+#if MAX_DESKTOPS < 1 || MAX_DESKTOPS > 9
+#error MAX_DESKTOPS must be between 1 and 9
+#endif
+
 #define MOD_SWITCH      MOD_CONTROL | MOD_ALT | MOD_NOREPEAT
 #define KEY_SWITCH(n)   ('1' + (n))
 
