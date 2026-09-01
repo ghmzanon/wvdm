@@ -71,11 +71,11 @@ typedef struct IVirtualDesktopManagerInternal {
  * slot  5: CanViewMoveToDesktop (unused)
  * slot  6: GetCurrentDesktop
  * slot  7: GetDesktops
- * slot  8: EnsureViewIsVisible (unused)
+ * slot  8: GetAdjacentDesktop (unused)
  * slot  9: SwitchDesktop
- * slot 10: IsViewOnDesktop (unused)
+ * slot 10: SwitchDesktopAndMoveForegroundView (unused)
  * slot 11: CreateDesktop
- * slot 12: varies by build (unused)
+ * slot 12: MoveDesktop (unused)
  * slot 13: RemoveDesktop(manager, toRemove, fallback) */
 struct IVirtualDesktopManagerInternalVtbl {
 	HRESULT (STDMETHODCALLTYPE *QueryInterface)(IVirtualDesktopManagerInternal*,
@@ -134,22 +134,20 @@ static IVirtualDesktopManagerInternal *g_manager = NULL;
 static IApplicationViewCollection     *g_view_collection = NULL;
 static GUID                            g_last_desktop_guid = {0};
 static BOOL                            g_have_last = FALSE;
-static int                             g_hotkey_failures = 0;
+static WCHAR                           g_hotkey_failure_text[1024] = L"";
 static const WCHAR                     kVersion[] = L"wvdm 1.0";
 
-/* release shell proxies after a failed call so the next action can reconnect */
+/* Release on a disconnected shell proxy can block; discard it until exit. */
 static void reset_shell_interfaces(void) {
-	if (g_view_collection) {
-		g_view_collection->lpVtbl->Release(g_view_collection);
-		g_view_collection = NULL;
-	}
-	if (g_manager) {
-		g_manager->lpVtbl->Release(g_manager);
-		g_manager = NULL;
-	}
-	if (g_provider) {
-		g_provider->lpVtbl->Release(g_provider);
-		g_provider = NULL;
+	g_view_collection = NULL;
+	g_manager = NULL;
+	g_provider = NULL;
+}
+
+/* only disconnected proxies need to be reacquired from ImmersiveShell */
+static void reset_if_shell_disconnected(HRESULT hr) {
+	if (hr == RPC_E_DISCONNECTED || hr == CO_E_OBJNOTCONNECTED) {
+		reset_shell_interfaces();
 	}
 }
 
@@ -165,24 +163,22 @@ static BOOL guid_equal(const GUID *a, const GUID *b) {
 		&& a->Data4[7] == b->Data4[7];
 }
 
-static BOOL get_desktop_guid(IVirtualDesktop *desktop, GUID *guid) {
-	return SUCCEEDED(desktop->lpVtbl->GetId(desktop, guid));
+static HRESULT get_desktop_guid(IVirtualDesktop *desktop, GUID *guid) {
+	return desktop->lpVtbl->GetId(desktop, guid);
 }
 
 /* fetch the GUID of the desktop we are on; FALSE on any failure */
 static BOOL get_current_desktop_guid(GUID *guid) {
 	IVirtualDesktop *current_desktop = NULL;
-	if (FAILED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
-		&current_desktop)) || !current_desktop) {
-		reset_shell_interfaces();
+	HRESULT hr = g_manager->lpVtbl->GetCurrentDesktop(g_manager,
+		&current_desktop);
+	if (FAILED(hr) || !current_desktop) {
+		reset_if_shell_disconnected(hr);
 		return FALSE;
 	}
-	BOOL ok = get_desktop_guid(current_desktop, guid);
+	HRESULT guid_hr = get_desktop_guid(current_desktop, guid);
 	current_desktop->lpVtbl->Release(current_desktop);
-	if (!ok) {
-		reset_shell_interfaces();
-	}
-	return ok;
+	return SUCCEEDED(guid_hr);
 }
 
 /* --- COM bootstrap --- */
@@ -208,9 +204,7 @@ static HRESULT ensure_manager(void) {
 		&CLSID_VirtualDesktopManagerInternal,
 		&IID_IVirtualDesktopManagerInternal,
 		(void**)&g_manager);
-	if (FAILED(hr)) {
-		reset_shell_interfaces();
-	}
+	reset_if_shell_disconnected(hr);
 	return hr;
 }
 
@@ -229,9 +223,7 @@ static HRESULT ensure_view_collection(void) {
 		&IID_IApplicationViewCollection,
 		&IID_IApplicationViewCollection,
 		(void**)&g_view_collection);
-	if (FAILED(hr)) {
-		reset_shell_interfaces();
-	}
+	reset_if_shell_disconnected(hr);
 	return hr;
 }
 
@@ -239,9 +231,9 @@ static HRESULT ensure_view_collection(void) {
 
 static IObjectArray *get_desktops(void) {
 	IObjectArray *desktops = NULL;
-	if (FAILED(g_manager->lpVtbl->GetDesktops(g_manager, &desktops))
-		|| !desktops) {
-		reset_shell_interfaces();
+	HRESULT hr = g_manager->lpVtbl->GetDesktops(g_manager, &desktops);
+	if (FAILED(hr) || !desktops) {
+		reset_if_shell_disconnected(hr);
 		return NULL;
 	}
 	return desktops;
@@ -249,11 +241,12 @@ static IObjectArray *get_desktops(void) {
 
 /* index of the desktop whose GUID matches, or -1; also reports the desktop
  * count so callers avoid a second GetCount round-trip */
-static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid,
+static int get_desktop_index(IObjectArray *desktops, GUID *target_guid,
 	UINT *out_count) {
 	UINT count = 0;
-	if (FAILED(desktops->lpVtbl->GetCount(desktops, &count))) {
-		reset_shell_interfaces();
+	HRESULT hr = desktops->lpVtbl->GetCount(desktops, &count);
+	if (FAILED(hr)) {
+		reset_if_shell_disconnected(hr);
 		return -1;
 	}
 	*out_count = count;
@@ -264,13 +257,13 @@ static int get_current_desktop_index(IObjectArray *desktops, GUID *cur_guid,
 			(void**)&desktop)) || !desktop) {
 			continue;
 		}
-		GUID guid;
-		BOOL ok = get_desktop_guid(desktop, &guid);
+		GUID desktop_guid;
+		HRESULT guid_hr = get_desktop_guid(desktop, &desktop_guid);
 		desktop->lpVtbl->Release(desktop);
-		if (!ok) {
+		if (FAILED(guid_hr)) {
 			continue;
 		}
-		if (guid_equal(&guid, cur_guid)) {
+		if (guid_equal(&desktop_guid, target_guid)) {
 			return (int)i;
 		}
 	}
@@ -297,9 +290,10 @@ static IVirtualDesktop *get_desktop_by_guid(GUID *guid) {
 	}
 
 	UINT count = 0;
-	if (FAILED(desktops->lpVtbl->GetCount(desktops, &count))) {
+	HRESULT hr = desktops->lpVtbl->GetCount(desktops, &count);
+	if (FAILED(hr)) {
 		desktops->lpVtbl->Release(desktops);
-		reset_shell_interfaces();
+		reset_if_shell_disconnected(hr);
 		return NULL;
 	}
 
@@ -311,7 +305,8 @@ static IVirtualDesktop *get_desktop_by_guid(GUID *guid) {
 			(void**)&d)) || !d) {
 			continue;
 		}
-		if (get_desktop_guid(d, &d_guid) && guid_equal(&d_guid, guid)) {
+		if (SUCCEEDED(get_desktop_guid(d, &d_guid))
+			&& guid_equal(&d_guid, guid)) {
 			desktop = d;
 			break;
 		}
@@ -334,7 +329,7 @@ static IVirtualDesktop *get_adjacent_desktop(UINT direction) {
 	}
 
 	UINT count = 0;
-	int idx = get_current_desktop_index(desktops, &cur_guid, &count);
+	int idx = get_desktop_index(desktops, &cur_guid, &count);
 	if (idx < 0) {
 		desktops->lpVtbl->Release(desktops);
 		return NULL;
@@ -412,15 +407,21 @@ static void foreground_activate(HWND target) {
 	if (!target_thread) {
 		return;
 	}
-	AttachThreadInput(target_thread, GetCurrentThreadId(), TRUE);
-	SetForegroundWindow(target);
+	if (!AttachThreadInput(target_thread, GetCurrentThreadId(), TRUE)) {
+		return;
+	}
+	if (!SetForegroundWindow(target)) {
+		AttachThreadInput(target_thread, GetCurrentThreadId(), FALSE);
+		return;
+	}
 	AttachThreadInput(target_thread, GetCurrentThreadId(), FALSE);
 }
 
 /* switch and activate the new desktop's shell-selected window */
 static BOOL switch_desktop(IVirtualDesktop *desktop) {
-	if (FAILED(g_manager->lpVtbl->SwitchDesktop(g_manager, desktop))) {
-		reset_shell_interfaces();
+	HRESULT hr = g_manager->lpVtbl->SwitchDesktop(g_manager, desktop);
+	if (FAILED(hr)) {
+		reset_if_shell_disconnected(hr);
 		return FALSE;
 	}
 	HWND target = find_activation_target();
@@ -436,7 +437,7 @@ static BOOL switch_desktop(IVirtualDesktop *desktop) {
 /* switch to the given desktop, remembering the one we leave */
 static BOOL switch_to(IVirtualDesktop *desktop) {
 	GUID d_guid;
-	if (!get_desktop_guid(desktop, &d_guid)) {
+	if (FAILED(get_desktop_guid(desktop, &d_guid))) {
 		/* cannot identify the target; switch without bookkeeping */
 		return switch_desktop(desktop);
 	}
@@ -476,9 +477,10 @@ static void move_window_to(IVirtualDesktop *desktop) {
 	}
 
 	IApplicationView *view = NULL;
-	if (FAILED(g_view_collection->lpVtbl->GetViewForHwnd(g_view_collection,
-		hwnd, &view)) || !view) {
-		reset_shell_interfaces();
+	HRESULT view_hr = g_view_collection->lpVtbl->GetViewForHwnd(
+		g_view_collection, hwnd, &view);
+	if (FAILED(view_hr) || !view) {
+		reset_if_shell_disconnected(view_hr);
 		desktop->lpVtbl->Release(desktop);
 		return;
 	}
@@ -488,7 +490,7 @@ static void move_window_to(IVirtualDesktop *desktop) {
 	HRESULT hr = g_manager->lpVtbl->MoveViewToDesktop(g_manager, (void*)view,
 		desktop);
 	if (FAILED(hr)) {
-		reset_shell_interfaces();
+		reset_if_shell_disconnected(hr);
 	} else if (SWITCH_AFTER_ACTION) {
 		switch_to(desktop);
 	}
@@ -552,8 +554,9 @@ static void create_virtual_desktop(void) {
 
 	/* no numbered hotkey above MAX_DESKTOPS; no room for an extra desktop */
 	UINT count = 0;
-	if (FAILED(g_manager->lpVtbl->GetCount(g_manager, &count))) {
-		reset_shell_interfaces();
+	HRESULT count_hr = g_manager->lpVtbl->GetCount(g_manager, &count);
+	if (FAILED(count_hr)) {
+		reset_if_shell_disconnected(count_hr);
 		return;
 	}
 	if (count >= MAX_DESKTOPS) {
@@ -561,9 +564,9 @@ static void create_virtual_desktop(void) {
 	}
 
 	IVirtualDesktop *desktop = NULL;
-	if (FAILED(g_manager->lpVtbl->CreateDesktop(g_manager, &desktop))
-		|| !desktop) {
-		reset_shell_interfaces();
+	HRESULT create_hr = g_manager->lpVtbl->CreateDesktop(g_manager, &desktop);
+	if (FAILED(create_hr) || !desktop) {
+		reset_if_shell_disconnected(create_hr);
 		return;
 	}
 
@@ -580,9 +583,10 @@ static void remove_virtual_desktop(void) {
 	}
 
 	IVirtualDesktop *current_desktop = NULL;
-	if (FAILED(g_manager->lpVtbl->GetCurrentDesktop(g_manager,
-		&current_desktop)) || !current_desktop) {
-		reset_shell_interfaces();
+	HRESULT current_hr = g_manager->lpVtbl->GetCurrentDesktop(g_manager,
+		&current_desktop);
+	if (FAILED(current_hr) || !current_desktop) {
+		reset_if_shell_disconnected(current_hr);
 		return;
 	}
 
@@ -599,8 +603,8 @@ static void remove_virtual_desktop(void) {
 	 * desktop; Windows will not remove the last one, so bail out */
 	GUID current_guid;
 	GUID fallback_guid;
-	if (get_desktop_guid(current_desktop, &current_guid)
-		&& get_desktop_guid(fallback_desktop, &fallback_guid)
+	if (SUCCEEDED(get_desktop_guid(current_desktop, &current_guid))
+		&& SUCCEEDED(get_desktop_guid(fallback_desktop, &fallback_guid))
 		&& guid_equal(&fallback_guid, &current_guid)) {
 		current_desktop->lpVtbl->Release(current_desktop);
 		fallback_desktop->lpVtbl->Release(fallback_desktop);
@@ -613,11 +617,15 @@ static void remove_virtual_desktop(void) {
 		return;
 	}
 	/* RemoveDesktop(this, desktopToRemove, fallbackDesktop) */
-	if (FAILED(g_manager->lpVtbl->RemoveDesktop(g_manager, current_desktop,
-		fallback_desktop))) {
-		/* removal failed (e.g. a window is still pinned); go back to the
-		 * desktop we were on instead of leaving the user on the fallback */
-		switch_to(current_desktop);
+	HRESULT hr = g_manager->lpVtbl->RemoveDesktop(g_manager, current_desktop,
+		fallback_desktop);
+	if (FAILED(hr)) {
+		reset_if_shell_disconnected(hr);
+		if (g_manager) {
+			/* removal failed (e.g. a window is still pinned); go back to the
+			 * desktop we were on instead of leaving the user on the fallback */
+			switch_to(current_desktop);
+		}
 	}
 
 	current_desktop->lpVtbl->Release(current_desktop);
@@ -646,22 +654,97 @@ static void switch_to_last_desktop(void) {
 
 /* --- command line and message loop --- */
 
+static int diagnose(void) {
+	if (FAILED(ensure_manager())) {
+		MessageBoxW(NULL, L"Virtual desktop manager unavailable", L"wvdm diagnose",
+			MB_OK | MB_ICONERROR);
+		return 1;
+	}
+
+	GUID current_guid;
+	if (!get_current_desktop_guid(&current_guid)) {
+		MessageBoxW(NULL, L"Could not get the current desktop", L"wvdm diagnose",
+			MB_OK | MB_ICONERROR);
+		return 1;
+	}
+
+	IObjectArray *desktops = get_desktops();
+	if (!desktops) {
+		MessageBoxW(NULL, L"Could not enumerate desktops", L"wvdm diagnose",
+			MB_OK | MB_ICONERROR);
+		return 1;
+	}
+
+	UINT count = 0;
+	HRESULT hr = desktops->lpVtbl->GetCount(desktops, &count);
+	desktops->lpVtbl->Release(desktops);
+	if (FAILED(hr)) {
+		reset_if_shell_disconnected(hr);
+		MessageBoxW(NULL, L"Could not count desktops", L"wvdm diagnose",
+			MB_OK | MB_ICONERROR);
+		return 1;
+	}
+
+	WCHAR message[256];
+	wsprintfW(message, L"Windows 11 24H2 interface probe succeeded.\n\n"
+		L"Desktops: %u\n\n"
+		L"Manual smoke test:\n"
+		L"- Switch to an empty desktop\n"
+		L"- Move a window in both directions\n"
+		L"- Restart Explorer and repeat", count);
+	MessageBoxW(NULL, message, L"wvdm diagnose", MB_OK | MB_ICONINFORMATION);
+	return 0;
+}
+
+static BOOL argument_equal(LPCSTR arg, LPCSTR expected) {
+	while (*arg && *expected) {
+		char arg_char = *arg++;
+		char expected_char = *expected++;
+		if (arg_char >= 'A' && arg_char <= 'Z') {
+			arg_char += 'a' - 'A';
+		}
+		if (expected_char >= 'A' && expected_char <= 'Z') {
+			expected_char += 'a' - 'A';
+		}
+		if (arg_char != expected_char) {
+			return FALSE;
+		}
+	}
+	if (*expected) {
+		return FALSE;
+	}
+	while (*arg == ' ' || *arg == '\t') {
+		arg++;
+	}
+	return !*arg;
+}
+
 static void print_help(void) {
 	static const WCHAR *help =
 		L"wvdm - windows virtual desktop manager\n"
 		L"\n"
 		L"  --help, -h        show this message\n"
 		L"  --version, -v     show version\n"
+		L"  --diagnose        probe the 24H2 desktop interface\n"
 		L"\n"
-		L"Hotkeys:\n"
-		L"  Configured at build time in config.h\n";
+		L"Default hotkeys (custom bindings: config.h):\n"
+		L"  Ctrl+Alt+1..9               switch to desktop N\n"
+		L"  Ctrl+Alt+Shift+1..9         move window to desktop N\n"
+		L"  Ctrl+Alt+Left/Right          previous/next desktop\n"
+		L"  Ctrl+Alt+Shift+Left/Right    move window to adjacent\n"
+		L"  Ctrl+Alt+Space             toggle last desktop\n"
+		L"  Ctrl+Alt+N                 create new desktop\n"
+		L"  Ctrl+Alt+W                 close current desktop\n"
+		L"  Ctrl+Alt+Q                 quit\n";
 	MessageBoxW(NULL, help, L"wvdm", MB_OK);
 }
 
-/* count registration failures so the user learns about binding conflicts */
-static void register_hotkey(int id, UINT modifiers, UINT key) {
+/* record failed registrations so binding conflicts identify the action */
+static void register_hotkey(int id, UINT modifiers, UINT key,
+	const WCHAR *name) {
 	if (!RegisterHotKey(NULL, id, modifiers, key)) {
-		g_hotkey_failures++;
+		lstrcatW(g_hotkey_failure_text, name);
+		lstrcatW(g_hotkey_failure_text, L"\n");
 	}
 }
 
@@ -677,13 +760,19 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		while (*arg == ' ' || *arg == '\t') {
 			arg++;
 		}
-		if (lstrcmpiA(arg, "--help") == 0 || lstrcmpiA(arg, "-h") == 0) {
+		if (argument_equal(arg, "--help") || argument_equal(arg, "-h")) {
 			print_help();
 			return 0;
 		}
-		if (lstrcmpiA(arg, "--version") == 0 || lstrcmpiA(arg, "-v") == 0) {
+		if (argument_equal(arg, "--version") || argument_equal(arg, "-v")) {
 			MessageBoxW(NULL, kVersion, L"wvdm", MB_OK);
 			return 0;
+		}
+		if (argument_equal(arg, "--diagnose")) {
+			if (FAILED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED))) {
+				return 1;
+			}
+			return diagnose();
 		}
 		print_help();
 		return 1;
@@ -706,21 +795,28 @@ static int wvdm_main(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	}
 
 	for (int i = 0; i < MAX_DESKTOPS; i++) {
-		register_hotkey(HOTKEY_ID_BASE + i, MOD_SWITCH, KEY_SWITCH(i));
-		register_hotkey(HOTKEY_ID_MOVE + i, MOD_MOVE, KEY_MOVE(i));
+		WCHAR switch_name[32];
+		WCHAR move_name[32];
+		wsprintfW(switch_name, L"Switch desktop %d", i + 1);
+		wsprintfW(move_name, L"Move window to desktop %d", i + 1);
+		register_hotkey(HOTKEY_ID_BASE + i, MOD_SWITCH, KEY_SWITCH(i),
+			switch_name);
+		register_hotkey(HOTKEY_ID_MOVE + i, MOD_MOVE, KEY_MOVE(i), move_name);
 	}
 
-	register_hotkey(HOTKEY_ID_PREV, MOD_PREV, KEY_PREV);
-	register_hotkey(HOTKEY_ID_NEXT, MOD_NEXT, KEY_NEXT);
-	register_hotkey(HOTKEY_ID_MOVE_PREV, MOD_MOVE_PREV, KEY_MOVE_PREV);
-	register_hotkey(HOTKEY_ID_MOVE_NEXT, MOD_MOVE_NEXT, KEY_MOVE_NEXT);
-	register_hotkey(HOTKEY_ID_EXIT, MOD_EXIT, KEY_EXIT);
-	register_hotkey(HOTKEY_ID_NEW, MOD_NEW, KEY_NEW);
-	register_hotkey(HOTKEY_ID_REMOVE, MOD_REMOVE, KEY_REMOVE);
-	register_hotkey(HOTKEY_ID_LAST, MOD_LAST, KEY_LAST);
+	register_hotkey(HOTKEY_ID_PREV, MOD_PREV, KEY_PREV, L"Previous desktop");
+	register_hotkey(HOTKEY_ID_NEXT, MOD_NEXT, KEY_NEXT, L"Next desktop");
+	register_hotkey(HOTKEY_ID_MOVE_PREV, MOD_MOVE_PREV, KEY_MOVE_PREV,
+		L"Move window to previous desktop");
+	register_hotkey(HOTKEY_ID_MOVE_NEXT, MOD_MOVE_NEXT, KEY_MOVE_NEXT,
+		L"Move window to next desktop");
+	register_hotkey(HOTKEY_ID_EXIT, MOD_EXIT, KEY_EXIT, L"Quit");
+	register_hotkey(HOTKEY_ID_NEW, MOD_NEW, KEY_NEW, L"Create desktop");
+	register_hotkey(HOTKEY_ID_REMOVE, MOD_REMOVE, KEY_REMOVE, L"Close desktop");
+	register_hotkey(HOTKEY_ID_LAST, MOD_LAST, KEY_LAST, L"Toggle last desktop");
 
-	if (g_hotkey_failures) {
-		MessageBoxW(NULL, L"Some hotkeys failed to register", L"wvdm",
+	if (g_hotkey_failure_text[0]) {
+		MessageBoxW(NULL, g_hotkey_failure_text, L"Hotkeys failed to register",
 			MB_OK | MB_ICONWARNING);
 	}
 
